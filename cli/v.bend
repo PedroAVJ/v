@@ -228,7 +228,7 @@ def stack_source(+line: String, root_json: Json.Val, +go: List<&2, String>) -> I
     +source : String = S.nth(S.words(line), 1n)
     local_json : String <- X.sh("cat '../" ++ source ++ "/../package.json' 2>/dev/null")
     components : String <- X.sh("test -f '../" ++ source ++ "/../components.json' && echo shadcn/ui")
-    files : String <- X.sh("find '../" ++ source ++ "' -type d \\( -name node_modules -o -name _generated \\) -prune -o -type f -print 2>/dev/null")
+    files : String <- X.sh("find '../" ++ source ++ "' -type d \\( -name node_modules -o -name _generated -o -name .next \\) -prune -o -type f -print 2>/dev/null")
     +json : Json.Val = package_or_root(local_json, root_json)
     +deps : List<&2, String> = S.dedupe(List.append(&2, String, package_deps(json), List.append(&2, String, go, S.nonempty(String.lines(components)))))
     return Stack{prefix(key, deps), prefix(key, S.dedupe(source_extensions(String.lines(files))))}
