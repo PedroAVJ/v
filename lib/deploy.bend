@@ -1,0 +1,474 @@
+import Base
+import ../arc/arc.bend as A
+
+# V's deployment layer for an Arc system: services, routes, how each runs, what a change breaks,
+# and the minimality checks against a machine (launch agents, listeners). A project supplies the data.
+
+def str_eq(a: String, b: String) -> Bool:
+  String.eq(a, b)
+
+def has(+s: String, xs: List<&2, String>) -> Bool:
+  A.has(s, xs)
+
+# ---- deployment facts ----
+# The address a system is reached at, and the data stores that must survive.
+type Deployment is Data:
+  Deployment{url: String, stores: List<&2, String>}
+
+# ---- compatibility: what a change breaks, compared to what was applied ----
+type Break is Data:
+  UrlChanged{}
+  StoreRemoved{name: String}
+
+def keep(present: Bool, o: String, rest: List<&2, Break>) -> List<&2, Break>:
+  match present:
+    case True{}:
+      rest
+    case False{}:
+      StoreRemoved{o} <> rest
+
+def removed(olds: List<&2, String>, +news: List<&2, String>) -> List<&2, Break>:
+  match olds:
+    case []:
+      []
+    case +o <> rest:
+      keep(has(o, news), o, removed(rest, news))
+
+def url_break(same: Bool) -> List<&2, Break>:
+  match same:
+    case True{}:
+      []
+    case False{}:
+      [UrlChanged{}]
+
+def breaks(old: Deployment, new: Deployment) -> List<&2, Break>:
+  match old new:
+    case Deployment{ou, os} Deployment{nu, ns}:
+      List.append(&2, Break, url_break(str_eq(ou, nu)), removed(os, ns))
+
+def break_eq(a: Break, b: Break) -> Bool:
+  match a b:
+    case UrlChanged{} UrlChanged{}:
+      True{}
+    case StoreRemoved{x} StoreRemoved{y}:
+      str_eq(x, y)
+    case _ _:
+      False{}
+
+def is_empty(b: List<&2, Break>) -> Bool:
+  match b:
+    case []:
+      True{}
+    case _ <> _:
+      False{}
+
+def breaks_eq(a: List<&2, Break>, b: List<&2, Break>) -> Bool:
+  match a:
+    case []:
+      is_empty(b)
+    case x <> xs:
+      match b:
+        case []:
+          False{}
+        case y <> ys:
+          break_eq(x, y) && breaks_eq(xs, ys)
+
+# ---- services: how each container is installed and served ----
+# port: where it listens locally; serve: its private Tailscale HTTPS port (0 = not served).
+type Service is Data:
+  Service{container: A.Container, label: String, script: String, port: U32, serve: U32}
+
+def serve_of(s: Service) -> U32:
+  match s:
+    case Service{_, _, _, _, serve}:
+      serve
+
+def serves(xs: List<&2, Service>) -> List<&2, U32>:
+  match xs:
+    case []:
+      []
+    case s <> rest:
+      serve_of(s) <> serves(rest)
+
+def not_in(+p: U32, xs: List<&2, U32>) -> Bool:
+  match xs:
+    case []:
+      True{}
+    case q <> rest:
+      (U32.is_eq(p, 0) || Bool.not(U32.is_eq(p, q))) && not_in(p, rest)
+
+# No two services claim the same Tailscale port.
+def distinct(xs: List<&2, U32>) -> Bool:
+  match xs:
+    case []:
+      True{}
+    case +p <> +rest:
+      not_in(p, rest) && distinct(rest)
+
+# A private-network HTTPS port served by a path on a service's local port (e.g. an app's URL -> its data API's HTTP routes).
+type Route is Data:
+  Route{container: A.Container, serve: U32, port: U32, path: String}
+
+def route_serves(xs: List<&2, Route>) -> List<&2, U32>:
+  match xs:
+    case []:
+      []
+    case r <> rest:
+      match r:
+        case Route{_, serve, _, _}:
+          serve <> route_serves(rest)
+
+# Every private-network port served: the services' and the routes'.
+def all_serves(ss: List<&2, Service>, rs: List<&2, Route>) -> List<&2, U32>:
+  List.append(&2, U32, serves(ss), route_serves(rs))
+
+# Only private containers on a server run as services.
+def on_server(c: A.Container, +ns: List<&2, A.Node>) -> Bool:
+  A.is_server(A.node_role(A.con(c), ns))
+
+def service_ok(s: Service, +ns: List<&2, A.Node>) -> Bool:
+  match s:
+    case Service{+c, _, _, _, _}:
+      on_server(c, ns) && A.private_ok(c, ns)
+
+# ---- exposure is honest ----
+def eq_bool(a: Bool, b: Bool) -> Bool:
+  match a:
+    case True{}:
+      b
+    case False{}:
+      Bool.not(b)
+
+def served_service(+k: String, xs: List<&2, Service>) -> Bool:
+  match xs:
+    case []:
+      False{}
+    case s <> rest:
+      match s:
+        case Service{c, _, _, _, serve}:
+          (str_eq(k, A.ckey(c)) && Bool.not(U32.is_eq(serve, 0))) || served_service(k, rest)
+
+def served_route(+k: String, xs: List<&2, Route>) -> Bool:
+  match xs:
+    case []:
+      False{}
+    case r <> rest:
+      match r:
+        case Route{c, _, _, _}:
+          str_eq(k, A.ckey(c)) || served_route(k, rest)
+
+# On a server, a container is on the private network exactly when it is served there; otherwise it is local.
+def exposure_honest(c: A.Container, +ss: List<&2, Service>, +rs: List<&2, Route>, +ns: List<&2, A.Node>) -> Bool:
+  match c:
+    case A.Container{+k, _, _, _, on, exposure, _}:
+      Bool.not(A.is_server(A.node_role(on, ns))) || eq_bool(A.is_tailnet(exposure), served_service(k, ss) || served_route(k, rs))
+
+def all_exposure_honest(xs: List<&2, A.Container>, +ss: List<&2, Service>, +rs: List<&2, Route>, +ns: List<&2, A.Node>) -> Bool:
+  match xs:
+    case []:
+      True{}
+    case c <> rest:
+      exposure_honest(c, ss, rs, ns) && all_exposure_honest(rest, ss, rs, ns)
+
+def route_ok(r: Route, +ns: List<&2, A.Node>) -> Bool:
+  match r:
+    case Route{+c, _, _, _}:
+      on_server(c, ns) && A.private_ok(c, ns)
+
+def all_routes_ok(xs: List<&2, Route>, +ns: List<&2, A.Node>) -> Bool:
+  match xs:
+    case []:
+      True{}
+    case r <> rest:
+      route_ok(r, ns) && all_routes_ok(rest, ns)
+
+def all_services_ok(xs: List<&2, Service>, +ns: List<&2, A.Node>) -> Bool:
+  match xs:
+    case []:
+      True{}
+    case s <> rest:
+      service_ok(s, ns) && all_services_ok(rest, ns)
+
+def port_of(s: Service) -> U32:
+  match s:
+    case Service{_, _, _, port, _}:
+      port
+
+def ports(xs: List<&2, Service>) -> List<&2, U32>:
+  match xs:
+    case []:
+      []
+    case s <> rest:
+      port_of(s) <> ports(rest)
+
+# No declared port (other than 0, "none") is in `taken`.
+def clear_of(xs: List<&2, U32>, +taken: List<&2, U32>) -> Bool:
+  match xs:
+    case []:
+      True{}
+    case +p <> rest:
+      not_in(p, taken) && clear_of(rest, taken)
+
+# ---- how each service runs (pinned by Nix) ----
+type Prog is Data:
+  RunNode{}
+  RunPython{}
+  RunBash{}
+
+# An environment variable: a plain value, or a Nix expression (e.g. a path in a derivation the project defines).
+type Env is Data:
+  Env{key: String, value: String}
+  NixEnv{key: String, expr: String}
+
+# When a service starts: at login (in the user's session: login Keychain, apps) or at boot (no session).
+type Start is Data:
+  AtLogin{}
+  AtBoot{}
+
+type Run is Data:
+  Run{label: String, prog: Prog, args: List<&2, String>, dir: String, env: List<&2, Env>, log: String, start: Start}
+
+# ---- machine minimality: every launch agent is declared ----
+def run_label(r: Run) -> String:
+  match r:
+    case Run{label, _, _, _, _, _, _}:
+      label
+
+# ---- surviving a reboot ----
+def at_login(s: Start) -> Bool:
+  match s:
+    case AtLogin{}:
+      True{}
+    case AtBoot{}:
+      False{}
+
+def needs_login(xs: List<&2, Run>) -> Bool:
+  match xs:
+    case []:
+      False{}
+    case r <> rest:
+      match r:
+        case Run{_, _, _, _, _, _, s}:
+          at_login(s) || needs_login(rest)
+
+# Services that start at login need the machine to log `user` in by itself.
+def survives_reboot(xs: List<&2, Run>, auto_login_user: String, user: String) -> Bool:
+  Bool.not(needs_login(xs)) || String.eq(auto_login_user, user)
+
+def run_labels(xs: List<&2, Run>) -> List<&2, String>:
+  match xs:
+    case []:
+      []
+    case r <> rest:
+      run_label(r) <> run_labels(rest)
+
+# ---- network minimality: every program reachable from other machines is declared ----
+# A program allowed to listen beyond 127.0.0.1, by process name, and what it belongs to: a container's key, or "macos".
+type Listener is Data:
+  Listener{process: String, of: String}
+
+def listener_processes(xs: List<&2, Listener>) -> List<&2, String>:
+  match xs:
+    case []:
+      []
+    case l <> rest:
+      match l:
+        case Listener{p, _}:
+          p <> listener_processes(rest)
+
+def listener_owners(xs: List<&2, Listener>) -> List<&2, String>:
+  match xs:
+    case []:
+      []
+    case l <> rest:
+      match l:
+        case Listener{_, o}:
+          o <> listener_owners(rest)
+
+def keep_listener(known: Bool, e: String, rest: List<&2, String>) -> List<&2, String>:
+  match known:
+    case True{}:
+      rest
+    case False{}:
+      e <> rest
+
+def head_or_empty(xs: List<&2, String>) -> String:
+  match xs:
+    case []:
+      ""
+    case w <> _:
+      w
+
+def first_word(s: String) -> String:
+  head_or_empty(String.split(s, ' '))
+
+# The exposed listeners ("process port") whose process nothing declares.
+def undeclared_listeners(xs: List<&2, String>, +declared: List<&2, String>) -> List<&2, String>:
+  match xs:
+    case []:
+      []
+    case +e <> rest:
+      keep_listener(has(first_word(e), declared), e, undeclared_listeners(rest, declared))
+
+# Launch agents the project declares: its services' and the ones it keeps.
+def declared_agents(rs: List<&2, Run>, kept: List<&2, String>) -> List<&2, String>:
+  List.append(&2, String, run_labels(rs), kept)
+
+def pick_undeclared(known: Bool, a: String, rest: List<&2, String>) -> List<&2, String>:
+  match known:
+    case True{}:
+      rest
+    case False{}:
+      a <> rest
+
+# The loaded agents that nothing declares.
+def undeclared(xs: List<&2, String>, +declared: List<&2, String>) -> List<&2, String>:
+  match xs:
+    case []:
+      []
+    case +a <> rest:
+      pick_undeclared(has(a, declared), a, undeclared(rest, declared))
+
+# ---- the deploy plan, one step per line, for `v deploy` to execute ----
+#   service <launchd label> <install script>
+#   serve <private-network https port> <local port>[path]
+def plan_serve(none: Bool, serve: U32, port: U32) -> String:
+  match none:
+    case True{}:
+      ""
+    case False{}:
+      "serve " ++ U32.show(serve) ++ " " ++ U32.show(port) ++ "\n"
+
+def plan_step(s: Service) -> String:
+  match s:
+    case Service{_, label, script, port, +serve}:
+      "service " ++ label ++ " " ++ script ++ "\n" ++ plan_serve(U32.is_eq(serve, 0), serve, port)
+
+def plan_steps(xs: List<&2, Service>) -> String:
+  match xs:
+    case []:
+      ""
+    case s <> rest:
+      plan_step(s) ++ plan_steps(rest)
+
+def plan_routes(xs: List<&2, Route>) -> String:
+  match xs:
+    case []:
+      ""
+    case r <> rest:
+      match r:
+        case Route{_, serve, port, path}:
+          "serve " ++ U32.show(serve) ++ " " ++ U32.show(port) ++ path ++ "\n" ++ plan_routes(rest)
+
+def plan(ss: List<&2, Service>, rs: List<&2, Route>) -> String:
+  plan_steps(ss) ++ plan_routes(rs)
+
+# ---- the deployment as text: its URL, then its stores ----
+def quoted_names(xs: List<&2, String>) -> String:
+  match xs:
+    case []:
+      ""
+    case x <> rest:
+      "\"" ++ x ++ "\", " ++ quoted_names(rest)
+
+def show_deployment(d: Deployment) -> String:
+  match d:
+    case Deployment{url, stores}:
+      url ++ "\n" ++ quoted_names(stores)
+
+# ---- facts `v` reads from a project: its flake host, where V's library is, its services' labels and ports ----
+def fact_lines(+k: String, xs: List<&2, String>) -> String:
+  match xs:
+    case []:
+      ""
+    case x <> rest:
+      k ++ " " ++ x ++ "\n" ++ fact_lines(k, rest)
+
+def service_ports(xs: List<&2, Service>) -> List<&2, String>:
+  match xs:
+    case []:
+      []
+    case s <> rest:
+      U32.show(port_of(s)) <> service_ports(rest)
+
+def facts(host: String, vlib: String, rs: List<&2, Run>, ss: List<&2, Service>) -> String:
+  "host " ++ host ++ "\nvlib " ++ vlib ++ "\n" ++ fact_lines("label", run_labels(rs)) ++ fact_lines("port", service_ports(ss))
+
+# ---- the nix-darwin flake: pinned inputs, the machine's module, and one launchd job per run ----
+def prog(p: Prog) -> String:
+  match p:
+    case RunNode{}:
+      "\"${pkgs.nodejs_24}/bin/node\""
+    case RunPython{}:
+      "\"${pkgs.python3.withPackages (ps: [ ps.watchdog ])}/bin/python3\""
+    case RunBash{}:
+      "\"${pkgs.bash}/bin/bash\""
+
+def strs(xs: List<&2, String>) -> String:
+  match xs:
+    case []:
+      ""
+    case x <> rest:
+      " \"" ++ x ++ "\"" ++ strs(rest)
+
+def env1(e: Env) -> String:
+  match e:
+    case Env{k, v}:
+      " " ++ k ++ " = \"" ++ v ++ "\";"
+    case NixEnv{k, x}:
+      " " ++ k ++ " = " ++ x ++ ";"
+
+def envs(xs: List<&2, Env>) -> String:
+  match xs:
+    case []:
+      ""
+    case e <> rest:
+      env1(e) ++ envs(rest)
+
+# At login: a launch agent in the user's session. At boot: a launch daemon that runs as the user.
+def job_kind(s: Start) -> String:
+  match s:
+    case AtLogin{}:
+      "launchd.user.agents"
+    case AtBoot{}:
+      "launchd.daemons"
+
+def user_name(s: Start, +user: String) -> String:
+  match s:
+    case AtLogin{}:
+      ""
+    case AtBoot{}:
+      " UserName = \"" ++ user ++ "\";"
+
+def job(r: Run, +user: String, +logs: String) -> String:
+  match r:
+    case Run{+label, p, args, dir, env, +log, +start}:
+      "      " ++ job_kind(start) ++ ".\"" ++ label ++ "\".serviceConfig = {\n" ++
+      "        Label = \"" ++ label ++ "\";" ++ user_name(start, user) ++ "\n" ++
+      "        ProgramArguments = [ " ++ prog(p) ++ strs(args) ++ " ];\n" ++
+      "        WorkingDirectory = \"" ++ dir ++ "\";\n" ++
+      "        EnvironmentVariables = {" ++ envs(env) ++ " };\n" ++
+      "        RunAtLoad = true; KeepAlive = true; ThrottleInterval = 10;\n" ++
+      "        StandardOutPath = \"" ++ logs ++ "/" ++ log ++ ".log\";\n" ++
+      "        StandardErrorPath = \"" ++ logs ++ "/" ++ log ++ ".log\";\n" ++
+      "      };\n"
+
+def jobs(xs: List<&2, Run>, +user: String, +logs: String) -> String:
+  match xs:
+    case []:
+      ""
+    case r <> rest:
+      job(r, user, logs) ++ jobs(rest, user, logs)
+
+# `lets` are Nix bindings the jobs may use (e.g. a derivation); `config` is extra nix-darwin config lines.
+def flake(host: String, system: String, lets: String, config: String, +user: String, +logs: String, rs: List<&2, Run>) -> String:
+  "# Generated by V. Do not edit; change the project and run `v deploy`.\n" ++
+  "{\n" ++
+  "  inputs.nixpkgs.url = \"github:NixOS/nixpkgs/nixpkgs-unstable\";\n" ++
+  "  inputs.nix-darwin.url = \"github:nix-darwin/nix-darwin/master\";\n" ++
+  "  inputs.nix-darwin.inputs.nixpkgs.follows = \"nixpkgs\";\n" ++
+  "  outputs = { nixpkgs, nix-darwin, ... }: {\n" ++
+  "    darwinConfigurations." ++ host ++ " = nix-darwin.lib.darwinSystem {\n" ++
+  "      system = \"" ++ system ++ "\";\n" ++
+  "      modules = [ ./mac.nix ({ pkgs, ... }: let\n" ++ lets ++
+  "      in {\n" ++ config ++ jobs(rs, user, logs) ++ "      }) ];\n    };\n  };\n}"

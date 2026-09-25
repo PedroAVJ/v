@@ -1,0 +1,289 @@
+import Base
+import ../lib/effs/io.bend as X
+import ../lib/vstr.bend as S
+import ../lib/mac.types.bend as T
+import ./project.bend as P
+import bend-net-json@0.3.0.0/json.bend as Json
+
+# V's command line, run in a project's folder. All logic is Bend; other programs run through
+# X.Proc.run (a C effect). The project's own programs (facts, plan, flake, laws...) run fresh, as `bend <file>`.
+
+def tailscale() -> String:
+  "/Applications/Tailscale.app/Contents/MacOS/Tailscale"
+
+# ---- snapshot: the Mac as it is, into bend/machine.bend ----
+def pid_if(hit: Bool, l: String) -> String:
+  match hit:
+    case True{}:
+      String.drop(l, 6n)
+    case False{}:
+      ""
+
+def pid_in(ls: List<&2, String>) -> String:
+  match ls:
+    case []:
+      ""
+    case +l <> rest:
+      pid_if(String.starts_with(String.trim(l), "pid = "), String.trim(l)) ++ pid_in(rest)
+
+def pids(labels: List<&2, String>, +uid: String) -> IO(List<&2, String>):
+  match labels:
+    case []:
+      IO.pure(List<&2, String>, [])
+    case l <> rest:
+      do IO<List<&2, String>>:
+        out : String <- X.sh("launchctl print gui/" ++ uid ++ "/" ++ l ++ " 2>/dev/null")
+        more : List<&2, String> <- pids(rest, uid)
+        return pid_in(String.lines(out)) <> more
+
+def port_if(keep: Bool, p: String) -> List<&2, String>:
+  match keep:
+    case True{}:
+      [p]
+    case False{}:
+      []
+
+# ---- listening sockets, from `lsof -F pcn` (one field per line: p<pid>, c<command>, n<address:port>) ----
+type Listen is Data:
+  Listen{pid: String, cmd: String, addr: String}
+
+def field(+l: String) -> String:
+  String.drop(l, 1n)
+
+def emit_if(name: Bool, +l: String, +pid: String, +cmd: String) -> List<&2, Listen>:
+  match name:
+    case True{}:
+      [Listen{pid, cmd, field(l)}]
+    case False{}:
+      []
+
+def emit(+l: String, +pid: String, +cmd: String) -> List<&2, Listen>:
+  emit_if(String.starts_with(l, "n"), l, pid, cmd)
+
+def listens(ls: List<&2, String>, +pid: String, +cmd: String) -> List<&2, Listen>:
+  match ls:
+    case []:
+      []
+    case +l <> rest:
+      List.append(&2, Listen, emit(l, pid, cmd), listens(rest, S.pick(String.starts_with(l, "p"), field(l), pid), S.pick(String.starts_with(l, "c"), field(l), cmd)))
+
+def port_of_addr(+addr: String) -> String:
+  S.last(String.split(addr, ':'))
+
+def host_of(+addr: String) -> String:
+  String.join(List.take(&2, String, String.split(addr, ':'), Nat.sub(S.count(String.split(addr, ':')), 1n)), ":")
+
+def loopback(+addr: String) -> Bool:
+  String.eq(host_of(addr), "127.0.0.1") || String.eq(host_of(addr), "[::1]")
+
+# Ports held by anything but Tailscale's own listener and V's processes (declared or V-installed).
+def foreign_ports(xs: List<&2, Listen>, +owned: List<&2, String>) -> List<&2, String>:
+  match xs:
+    case []:
+      []
+    case x <> rest:
+      match x:
+        case Listen{+pid, +cmd, +addr}:
+          S.append(port_if(Bool.not(String.eq(cmd, "IPNExtension")) && Bool.not(T.has(pid, owned)), port_of_addr(addr)), foreign_ports(rest, owned))
+
+# Ports that V's own processes listen on.
+def owned_ports(xs: List<&2, Listen>, +owned: List<&2, String>) -> List<&2, String>:
+  match xs:
+    case []:
+      []
+    case x <> rest:
+      match x:
+        case Listen{+pid, _, +addr}:
+          S.append(port_if(T.has(pid, owned), port_of_addr(addr)), owned_ports(rest, owned))
+
+# "process port" for listeners beyond 127.0.0.1 / [::1]: reachable from other machines.
+def exposed(xs: List<&2, Listen>) -> List<&2, String>:
+  match xs:
+    case []:
+      []
+    case x <> rest:
+      match x:
+        case Listen{_, +cmd, +addr}:
+          S.append(port_if(Bool.not(loopback(addr)), cmd ++ " " ++ port_of_addr(addr)), exposed(rest))
+
+# Tailscale Serve status as JSON (bend-net-json):
+#   {"Web": {"<host>:<port>": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:<local>[/path]"}}}}}
+def url_port(w: String) -> String:
+  S.digits(S.last(String.split(w, ':')))
+
+def json_or_null(m: Maybe<&2, Json.Val>) -> Json.Val:
+  match m:
+    case None{}:
+      Json.Null{}
+    case Some{v}:
+      v
+
+def at(v: Json.Val, k: String) -> Json.Val:
+  json_or_null(Json.get(v, k))
+
+def str_of(v: Json.Val) -> String:
+  match v:
+    case Json.Str{s}:
+      s
+    case _:
+      ""
+
+def obj_keys(v: Json.Val) -> List<&2, String>:
+  match v:
+    case Json.Obj{m}:
+      Map.keys(&2, Json.Val, m)
+    case _:
+      []
+
+# The Serve "Web" object of `tailscale serve status --json`.
+def web_of(s: String) -> Json.Val:
+  at(json_or_null(Json.parse(s)), "Web")
+
+def proxy(+web: Json.Val, k: String) -> String:
+  str_of(at(at(at(at(web, k), "Handlers"), "/"), "Proxy"))
+
+# Served ports whose proxy target is not one of `declared` local ports.
+def web_serves(+web: Json.Val, ks: List<&2, String>, +declared: List<&2, String>) -> List<&2, String>:
+  match ks:
+    case []:
+      []
+    case +k <> rest:
+      S.append(port_if(Bool.not(T.has(url_port(proxy(web, k)), declared)), url_port(k)), web_serves(web, rest, declared))
+
+# Whether `port` is already served by exactly `target`.
+def serving(+web: Json.Val, ks: List<&2, String>, +port: String, +target: String) -> Bool:
+  match ks:
+    case []:
+      False{}
+    case +k <> rest:
+      (String.eq(url_port(k), port) && String.eq(proxy(web, k), target)) || serving(web, rest, port, target)
+
+
+# launchctl list: third column is the label; macOS's own are left out.
+def agent_if(+label: String) -> List<&2, String>:
+  port_if(Bool.not(String.is_empty(label)) && Bool.not(String.starts_with(label, "com.apple.")) && Bool.not(String.starts_with(label, "application.")) && Bool.not(String.eq(label, "com.openssh.ssh-agent")), label)
+
+def agent_labels(ls: List<&2, String>) -> List<&2, String>:
+  match ls:
+    case []:
+      []
+    case l <> rest:
+      S.append(agent_if(S.nth(String.split(l, '\t'), 2n)), agent_labels(rest))
+
+def machine_text(ports: List<&2, String>, serves: List<&2, String>, agents: List<&2, String>, installed: List<&2, String>, exposed: List<&2, String>) -> String:
+  "import Base\n\n# The machine as it was when `v snapshot` ran. Generated; do not edit.\n\n" ++
+  "def foreign_ports() -> List<&2, U32>:\n  [" ++ String.join(ports, ", ") ++ "]\n\n" ++
+  "def foreign_serves() -> List<&2, U32>:\n  [" ++ String.join(serves, ", ") ++ "]\n\n" ++
+  "def agents() -> List<&2, String>:\n  [" ++ S.quote_all(agents) ++ "]\n\n" ++
+  "# Launch agents V itself installed at the last deploy (nix-darwin's current generation); the next deploy reconciles them.\n" ++
+  "def installed() -> List<&2, String>:\n  [" ++ S.quote_all(installed) ++ "]\n\n" ++
+  "# Programs listening beyond 127.0.0.1 (\"process port\"): reachable from other machines.\n" ++
+  "def exposed() -> List<&2, String>:\n  [" ++ S.quote_all(exposed) ++ "]\n"
+
+def snapshot(+f: P.Facts) -> IO(Unit):
+  do IO<Unit>:
+    uid : String <- X.sh("id -u")
+    +inst : String <- X.sh("ls /run/current-system/user/Library/LaunchAgents 2>/dev/null | sed 's/[.]plist$//'")
+    +owned : List<&2, String> <- pids(S.append(P.labels_of(f), S.nonempty(String.lines(inst))), String.trim(uid))
+    lsof : String <- X.sh("lsof +c 0 -nP -iTCP -sTCP:LISTEN -F pcn")
+    +sockets : List<&2, Listen> = listens(String.lines(lsof), "", "")
+    serve : String <- X.sh(tailscale() ++ " serve status --json")
+    list : String <- X.sh("launchctl list")
+    +ports : List<&2, String> = S.dedupe(foreign_ports(sockets, owned))
+    +web : Json.Val = web_of(serve)
+    +serves : List<&2, String> = web_serves(web, obj_keys(web), S.append(P.ports_of(f), owned_ports(sockets, owned)))
+    +agents : List<&2, String> = agent_labels(List.drop(&2, String, String.lines(list), 1n))
+    X.write_file("machine.bend", machine_text(ports, serves, agents, S.nonempty(String.lines(inst)), S.dedupe(exposed(sockets))))
+    IO.print("snapshot: " ++ Nat.show(S.count(ports)) ++ " foreign ports, " ++ Nat.show(S.count(serves)) ++ " foreign serves, " ++ Nat.show(S.count(agents)) ++ " launch agents")
+
+# ---- check, plan, diagram ----
+def fail_or(ok: Bool, out: String, then: IO(Unit)) -> IO(Unit):
+  match ok:
+    case True{}:
+      then
+    case False{}:
+      IO.die(Unit, 1, out)
+
+# Prove the laws against the current snapshot. Anything unproven stops V.
+def prove() -> IO(Unit):
+  do IO<Unit>:
+    +out : String <- P.check_bend("PROOF.bend")
+    fail_or(String.contains(out, "All terms check."), out, IO.print("laws: all proven"))
+
+def check_with(+f: P.Facts) -> IO(Unit):
+  do IO<Unit>:
+    snapshot(f)
+    prove()
+
+def check() -> IO(Unit):
+  do IO<Unit>:
+    f : P.Facts <- P.read_facts()
+    check_with(f)
+
+def snapshot_only() -> IO(Unit):
+  do IO<Unit>:
+    f : P.Facts <- P.read_facts()
+    snapshot(f)
+
+def diagram(+out: String) -> IO(Unit):
+  do IO<Unit>:
+    d2 : String <- P.run_bend("diagram.bend")
+    X.write_file("/tmp/v-diagram.d2", d2)
+    +ok : Bool <- X.ok("d2 --layout elk /tmp/v-diagram.d2 " ++ out ++ " >/dev/null 2>&1")
+    fail_or(ok, "d2 failed", IO.print(out))
+
+# ---- deploy ----
+# One "serve <port> <local>" plan line: make sure Tailscale serves it.
+def serve_apply(current: Bool, +port: String, +local: String) -> IO(Unit):
+  match current:
+    case True{}:
+      IO.print("current  serve :" ++ port ++ " -> " ++ local)
+    case False{}:
+      do IO<Unit>:
+        IO.print("deploy   serve :" ++ port ++ " -> " ++ local)
+        +ok : Bool <- X.ok(tailscale() ++ " serve --bg --yes --https=" ++ port ++ " http://127.0.0.1:" ++ local)
+        fail_or(ok, "failed: serve " ++ port, IO.pure(Unit, Unit{}))
+
+def serve_do(is_serve: Bool, current: Bool, +port: String, +local: String) -> IO(Unit):
+  match is_serve:
+    case False{}:
+      IO.pure(Unit, Unit{})
+    case True{}:
+      serve_apply(current, port, local)
+
+def serve_step(+w: List<&2, String>, +web: Json.Val) -> IO(Unit):
+  serve_do(String.eq(S.nth(w, 0n), "serve"), serving(web, obj_keys(web), S.nth(w, 1n), "http://127.0.0.1:" ++ S.nth(w, 2n)), S.nth(w, 1n), S.nth(w, 2n))
+
+def serve_steps(ls: List<&2, String>, +web: Json.Val) -> IO(Unit):
+  match ls:
+    case []:
+      IO.pure(Unit, Unit{})
+    case l <> rest:
+      do IO<Unit>:
+        serve_step(S.words(l), web)
+        serve_steps(rest, web)
+
+def applied_text(vlib: String, url: String, stores: String) -> String:
+  "import Base\nimport " ++ vlib ++ "/deploy.bend as D\n\n# What is running now (written by `v deploy`). Generated; do not edit.\ndef applied() -> D.Deployment:\n  D.Deployment{\"" ++ url ++ "\", [" ++ stores ++ "]}\n"
+
+def current_parts(vlib: String, +c: String) -> String:
+  applied_text(vlib, String.trim(S.nth(String.lines(c), 0n)), String.trim(S.nth(String.lines(c), 1n)))
+
+def deploy() -> IO(Unit):
+  do IO<Unit>:
+    +f : P.Facts <- P.read_facts()
+    check_with(f)
+    flake : String <- P.run_bend("flake.bend")
+    X.write_file("nix/flake.nix", flake)
+    mac : String <- P.run_bend("mac.gen.bend")
+    X.write_file("nix/mac.nix", mac)
+    staged : Bool <- X.ok("git add nix")
+    IO.print("deploy   nix-darwin (" ++ P.flake_host(f) ++ ")")
+    +ok : Bool <- X.ok("sudo -n /run/current-system/sw/bin/darwin-rebuild switch --flake \"$(pwd)/nix#" ++ P.flake_host(f) ++ "\" >/tmp/v-rebuild.log 2>&1")
+    fail_or(ok, "failed: darwin-rebuild switch (see /tmp/v-rebuild.log)", IO.pure(Unit, Unit{}))
+    status : String <- X.sh(tailscale() ++ " serve status --json")
+    plan : String <- P.run_bend("plan.bend")
+    serve_steps(String.lines(plan), web_of(status))
+    +cur : String <- P.run_bend("current.bend")
+    X.write_file("applied.bend", current_parts(P.vlib_of(f), cur))
+    IO.print("deployed: " ++ String.trim(S.nth(String.lines(cur), 0n)))
