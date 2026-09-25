@@ -8,8 +8,11 @@ import ../lib/deploy.bend as D
 
 # ---- where it runs ----
 def nodes() -> List<&2, A.Node>:
-  [ A.Node{"machine", "Your machine", A.Server{}},
-    A.Node{"outside", "Outside", A.Outside{}} ]
+  [ A.Node{"machine", "Mac mini", A.Server{}, A.Owned{"machine"}},
+    A.Node{"outside", "Outside", A.Outside{}, A.Other{}} ]
+
+def org() -> A.Org:
+  A.Org{"Pedro", A.Vendor{"Apple", "iCloud"}, [A.PhysicalDevice{"machine", "Mac mini", "macOS"}]}
 
 # ---- what it is ----
 def near() -> List<&2, A.Container>:
@@ -41,7 +44,7 @@ def links() -> List<&2, A.Link>:
     A.Link{"v", "github", "source", False{}} ]
 
 def system() -> A.System:
-  A.System{nodes(), near(), parts(), links()}
+  A.System{org(), nodes(), near(), parts(), links()}
 
 # ---- how V deploys: it publishes its packages to the Bend hub ----
 def targets() -> List<&2, D.Target>:

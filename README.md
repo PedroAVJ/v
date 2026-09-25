@@ -11,8 +11,9 @@ It builds on packages from the Bend hub, and nothing in it is specific to one pr
 `arc/arc.bend` is the architecture layer, published on its own. A system is two
 hierarchies over the same containers:
 
-- **Where it runs:** node → container → part. Nodes are yours to declare, each with a
-  role: `UserDevice`, `Server`, `Overlay` (the private network) or `Outside`.
+- **Where it runs:** node → container → part. Nodes have a role (`UserDevice`,
+  `Server`, `Overlay` or `Outside`), and servers and user devices name an owned
+  physical device or the organization's vendor cloud.
 - **What it is:** system → container → part. A container is one of a closed list of
   kinds (`Client`, `Network`, `DataApi`, `AgentsApi`, `ModelApi`, `Worker`), `Ours` or
   `Theirs`, with an exposure (`Local`, `Lan`, `Tailnet`, `Device`, `Public`) and the

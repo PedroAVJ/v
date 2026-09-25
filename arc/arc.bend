@@ -16,8 +16,22 @@ type NodeRole is Data:
   Overlay{}
   Outside{}
 
+type PhysicalDevice is Data:
+  PhysicalDevice{key: String, name: String, platform: String}
+
+type Vendor is Data:
+  Vendor{name: String, cloud: String}
+
+type Org is Data:
+  Org{name: String, vendor: Vendor, devices: List<&2, PhysicalDevice>}
+
+type Host is Data:
+  Owned{device: String}
+  Cloud{provider: String}
+  Other{}
+
 type Node is Data:
-  Node{key: String, name: String, role: NodeRole}
+  Node{key: String, name: String, role: NodeRole, host: Host}
 
 # What a container is. The list is closed: something that is none of these is not a container.
 # Client: the app, on the user's device. The private overlay is a node, not a container.
@@ -76,32 +90,37 @@ type Link is Data:
   Link{src: String, dst: String, label: String, live: Bool}
 
 type System is Data:
-  System{nodes: List<&2, Node>, containers: List<&2, Container>, parts: List<&2, Part>, links: List<&2, Link>}
+  System{org: Org, nodes: List<&2, Node>, containers: List<&2, Container>, parts: List<&2, Part>, links: List<&2, Link>}
 
 # ---- access ----
+def org(s: System) -> Org:
+  match s:
+    case System{o, _, _, _, _}:
+      o
+
 def nodes(s: System) -> List<&2, Node>:
   match s:
-    case System{n, _, _, _}:
+    case System{_, n, _, _, _}:
       n
 
 def containers(s: System) -> List<&2, Container>:
   match s:
-    case System{_, c, _, _}:
+    case System{_, _, c, _, _}:
       c
 
 def parts(s: System) -> List<&2, Part>:
   match s:
-    case System{_, _, p, _}:
+    case System{_, _, _, p, _}:
       p
 
 def links(s: System) -> List<&2, Link>:
   match s:
-    case System{_, _, _, l}:
+    case System{_, _, _, _, l}:
       l
 
 def nkey(n: Node) -> String:
   match n:
-    case Node{k, _, _}:
+    case Node{k, _, _, _}:
       k
 
 def ckey(c: Container) -> String:
@@ -201,7 +220,7 @@ def overlay_nodes.go(xs: List<&2, Node>) -> Nat:
       0n
     case n <> rest:
       match n:
-        case Node{_, _, role}:
+        case Node{_, _, role, _}:
           Nat.add(one_if(is_overlay(role)), overlay_nodes.go(rest))
 
 # Private access is represented by exactly one Overlay node.
@@ -260,6 +279,38 @@ def has(+s: String, xs: List<&2, String>) -> Bool:
       False{}
     case x <> rest:
       str_eq(s, x) || has(s, rest)
+
+def owned_device(+key: String, +name: String, xs: List<&2, PhysicalDevice>) -> Bool:
+  match xs:
+    case []:
+      False{}
+    case PhysicalDevice{k, n, _} <> rest:
+      (str_eq(key, k) && str_eq(name, n)) || owned_device(key, name, rest)
+
+def host_in_inventory(h: Host, name: String, o: Org) -> Bool:
+  match h o:
+    case Owned{key} Org{_, _, devices}:
+      owned_device(key, name, devices)
+    case Cloud{provider} Org{_, Vendor{_, cloud}, _}:
+      str_eq(provider, cloud)
+    case Other{} _:
+      False{}
+
+def node_owned(n: Node, +o: Org) -> Bool:
+  match n:
+    case Node{_, name, +role, host}:
+      Bool.not(is_server(role) || is_device(role)) || host_in_inventory(host, name, o)
+
+def owned_nodes.go(xs: List<&2, Node>, +o: Org) -> Bool:
+  match xs:
+    case []:
+      True{}
+    case n <> rest:
+      node_owned(n, o) && owned_nodes.go(rest, o)
+
+# Every server and user device is in the owner's inventory or on its vendor's cloud.
+def owned_nodes(+s: System) -> Bool:
+  owned_nodes.go(nodes(s), org(s))
 
 def pick_str(c: Bool, a: String, b: String) -> String:
   match c:
@@ -366,7 +417,7 @@ def node_role(+k: String, xs: List<&2, Node>) -> NodeRole:
       Outside{}
     case n <> rest:
       match n:
-        case Node{nk, _, r}:
+        case Node{nk, _, r, _}:
           pick_r(str_eq(k, nk), r, node_role(k, rest))
 
 def part_node(+k: String, xs: List<&2, Part>) -> String:
@@ -581,7 +632,7 @@ def path(+k: String, +s: System) -> String:
 
 def node_box(n: Node) -> String:
   match n:
-    case Node{k, name, role}:
+    case Node{k, name, role, _}:
       match role:
         case Outside{}:
           k ++ ": \"" ++ name ++ "\" {class: node; style.stroke-dash: 4; style.fill: \"#FFFFFF\"}\n"
