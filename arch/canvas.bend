@@ -51,4 +51,4 @@ def targets() -> List<&2, D.Target>:
   [D.BendHub{}]
 
 def packages() -> List<&2, D.Package>:
-  [ D.Package{"near-architecture", "0.9.0.0", "../arc/arc.bend"} ]
+  [ D.Package{"near-architecture", "0.9.1.0", "../arc/arc.bend"} ]

@@ -1,5 +1,7 @@
 import Base
 
+# Arc, by Pedro Antonio Villanueva Juarez · https://github.com/PedroAVJ/v (V, the framework that uses it)
+#
 # Arc: a system's architecture as types, in two hierarchies over the same containers.
 #   Where it runs: node -> container -> part.
 #   What it is:    system -> container -> part.
