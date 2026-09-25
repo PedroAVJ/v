@@ -23,10 +23,10 @@ def near() -> List<&2, A.Container>:
     A.Container{"github", "GitHub", A.DataApi{}, A.Theirs{}, "outside", A.Public{}, [], "", ["GitHub"], [], [], []} ]
 
 def parts() -> List<&2, A.Part>:
-  [ A.Part{"cli", "v command (check, import, dryrun, plan, deploy, diagram)", A.Bend{}, "v"},
-    A.Part{"arc", "Arc (near-architecture)", A.Bend{}, "v"},
-    A.Part{"lib", "Deploy and Mac library", A.Bend{}, "v"},
-    A.Part{"proc", "Run-a-program effect", A.C{}, "v"} ]
+  [ A.Part{"cli", "v command (check, import, dryrun, plan, deploy, diagram)", A.Bend{}, "v", "machine"},
+    A.Part{"arc", "Arc (near-architecture)", A.Bend{}, "v", "machine"},
+    A.Part{"lib", "Deploy and Mac library", A.Bend{}, "v", "machine"},
+    A.Part{"proc", "Run-a-program effect", A.C{}, "v", "machine"} ]
 
 def links() -> List<&2, A.Link>:
   [ A.Link{"cli", "bend", "compiles, proves, publishes", False{}},
@@ -48,4 +48,4 @@ def targets() -> List<&2, D.Target>:
   [D.BendHub{}]
 
 def packages() -> List<&2, D.Package>:
-  [ D.Package{"near-architecture", "0.6.0.0", "../arc/arc.bend"} ]
+  [ D.Package{"near-architecture", "0.7.0.0", "../arc/arc.bend"} ]

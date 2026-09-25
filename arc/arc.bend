@@ -3,8 +3,9 @@ import Base
 # Arc: a system's architecture as types, in two hierarchies over the same containers.
 #   Where it runs: node -> container -> part.
 #   What it is:    system -> container -> part.
-# Keys work like foreign keys: a container names its node (`on`), a part its container (`in`),
-# a link two keys. A project states its laws with the predicates below; the compiler proves them.
+# Keys work like foreign keys: a container names its host node (`on`), a part its container (`in`)
+# and execution node (`on`), and a link two keys. A project states its laws with the predicates
+# below; the compiler proves them.
 
 # ---- vocabulary ----
 # UserDevice: a user's own device. Server: a machine the project runs. Overlay: the private
@@ -68,7 +69,7 @@ type Container is Data:
   Container{key: String, name: String, kind: ContainerKind, owner: Owner, on: String, exposure: Exposure, caps: List<&2, Cap>, source: String, vendors: List<&2, String>, frameworks: List<&2, String>, libraries: List<&2, String>, languages: List<&2, String>}
 
 type Part is Data:
-  Part{key: String, name: String, lang: Lang, in: String}
+  Part{key: String, name: String, lang: Lang, in: String, on: String}
 
 # A talks-to edge between two containers or parts, by key.
 type Link is Data:
@@ -120,13 +121,18 @@ def caps(c: Container) -> List<&2, Cap>:
 
 def pkey(p: Part) -> String:
   match p:
-    case Part{k, _, _, _}:
+    case Part{k, _, _, _, _}:
       k
 
 def pin(p: Part) -> String:
   match p:
-    case Part{_, _, _, i}:
+    case Part{_, _, _, i, _}:
       i
+
+def pon(p: Part) -> String:
+  match p:
+    case Part{_, _, _, _, on}:
+      on
 
 def nkeys(xs: List<&2, Node>) -> List<&2, String>:
   match xs:
@@ -285,6 +291,13 @@ def part_ins(xs: List<&2, Part>) -> List<&2, String>:
     case p <> rest:
       pin(p) <> part_ins(rest)
 
+def part_ons(xs: List<&2, Part>) -> List<&2, String>:
+  match xs:
+    case []:
+      []
+    case p <> rest:
+      pon(p) <> part_ons(rest)
+
 def container_ons(xs: List<&2, Container>) -> List<&2, String>:
   match xs:
     case []:
@@ -307,6 +320,7 @@ def well_formed(+s: System) -> Bool:
   distinct_keys(nkeys(nodes(s))) && distinct_keys(keys(s)) &&
   all_in(container_ons(containers(s)), nkeys(nodes(s))) &&
   all_in(part_ins(parts(s)), ckeys(containers(s))) &&
+  all_in(part_ons(parts(s)), nkeys(nodes(s))) &&
   all_in(link_ends(links(s)), keys(s))
 
 # ---- looking things up ----
@@ -355,9 +369,16 @@ def node_role(+k: String, xs: List<&2, Node>) -> NodeRole:
         case Node{nk, _, r}:
           pick_r(str_eq(k, nk), r, node_role(k, rest))
 
+def part_node(+k: String, xs: List<&2, Part>) -> String:
+  match xs:
+    case []:
+      ""
+    case +p <> rest:
+      pick_str(str_eq(k, pkey(p)), pon(p), part_node(k, rest))
+
 # The node a container or part runs on, and its role.
 def node_of(+k: String, +s: System) -> String:
-  con(container(home(k, s), containers(s)))
+  pick_str(has(k, pkeys(parts(s))), part_node(k, parts(s)), con(container(home(k, s), containers(s))))
 
 def role_of(+k: String, +s: System) -> NodeRole:
   node_role(node_of(k, s), nodes(s))
@@ -400,6 +421,31 @@ def devices_via_network.go(xs: List<&2, Link>, +s: System) -> Bool:
 
 def devices_via_network(+s: System) -> Bool:
   devices_via_network.go(links(s), s)
+
+# A server container needs overlay exposure exactly when a device-origin link reaches it.
+def device_reaches(+key: String, xs: List<&2, Link>, +s: System) -> Bool:
+  match xs:
+    case []:
+      False{}
+    case Link{src, dst, _, _} <> rest:
+      (is_device(role_of(src, s)) && str_eq(home(dst, s), key)) || device_reaches(key, rest, s)
+
+def exposure_for_reach(c: Container, reached: Bool) -> Bool:
+  match reached:
+    case True{}: is_tailnet(container_exposure(c))
+    case False{}: is_local(container_exposure(c))
+
+def exposure_follows_reach.go(xs: List<&2, Container>, +s: System) -> Bool:
+  match xs:
+    case []:
+      True{}
+    case +c <> rest:
+      (Bool.not(is_server(role_of(ckey(c), s))) ||
+        exposure_for_reach(c, device_reaches(ckey(c), links(s), s))) &&
+        exposure_follows_reach.go(rest, s)
+
+def exposure_follows_reach(+s: System) -> Bool:
+  exposure_follows_reach.go(containers(s), s)
 
 # ---- what it is: minimality, every capability provided exactly once ----
 def is_cap(want: Cap, c: Cap) -> Bool:
@@ -500,7 +546,7 @@ def backend(c: Container) -> Bool:
 
 def rust_ok(p: Part, +s: System) -> Bool:
   match p:
-    case Part{_, _, lang, i}:
+    case Part{_, _, lang, i, _}:
       Bool.not(backend(container(i, containers(s)))) || is_rust(lang)
 
 def all_rust.go(xs: List<&2, Part>, +s: System) -> Bool:
@@ -578,7 +624,7 @@ def container_boxes(xs: List<&2, Container>) -> String:
 
 def part_box(p: Part, +s: System) -> String:
   match p:
-    case Part{+k, name, _, _}:
+    case Part{+k, name, _, _, _}:
       path(k, s) ++ ": \"" ++ name ++ "\" {class: part}\n"
 
 def part_boxes(xs: List<&2, Part>, +s: System) -> String:
