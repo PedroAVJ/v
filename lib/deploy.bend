@@ -493,11 +493,12 @@ def show_deployment(d: Deployment) -> String:
 
 # ---- where a project deploys: only what it declares runs ----
 # NixDarwin: configure a Mac with nix-darwin (its flake host). TailscaleServe: serve the plan's ports on the
-# private network. BendHub: publish the project's packages.
+# private network. BendHub: publish the project's packages. AzureSnapshot: read-only ARM and DevOps facts.
 type Target is Data:
   NixDarwin{host: String}
   TailscaleServe{}
   BendHub{}
+  AzureSnapshot{organization: String, project: String}
 
 # A package published to the Bend hub: its name, version (four numbers) and entry file (relative to the project).
 type Package is Data:
@@ -561,6 +562,8 @@ def target_line(t: Target) -> String:
       "target tailscale-serve\n"
     case BendHub{}:
       "target bend-hub\n"
+    case AzureSnapshot{org, project}:
+      "target azure " ++ org ++ " " ++ project ++ "\n"
 
 def target_lines(xs: List<&2, Target>) -> String:
   match xs:

@@ -82,6 +82,19 @@ def host_in(+name: String, ts: List<&2, String>) -> String:
 def flake_host(+f: Facts) -> String:
   host_in("nix-darwin", targets_of(f))
 
+def target_arg(+name: String, +index: Nat, ts: List<&2, String>) -> String:
+  match ts:
+    case []:
+      ""
+    case +t <> rest:
+      S.pick(String.eq(S.nth(S.words(t), 0n), name), S.nth(S.words(t), index), target_arg(name, index, rest))
+
+def azure_organization(+f: Facts) -> String:
+  target_arg("azure", 1n, targets_of(f))
+
+def azure_project(+f: Facts) -> String:
+  target_arg("azure", 2n, targets_of(f))
+
 def when(c: Bool, act: IO(Unit)) -> IO(Unit):
   match c:
     case True{}:
