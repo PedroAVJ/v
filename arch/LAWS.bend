@@ -1,5 +1,5 @@
 import Base
-import near-architecture@0.2.0.0/arc.bend as Arc
+import near-architecture@0.3.0.0/arc.bend as Arc
 import ../lib/deploy.bend as D
 import ./canvas.bend as V
 

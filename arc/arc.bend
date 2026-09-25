@@ -160,6 +160,13 @@ def is_server(r: NodeRole) -> Bool:
     case _:
       False{}
 
+def is_outside(r: NodeRole) -> Bool:
+  match r:
+    case Outside{}:
+      True{}
+    case _:
+      False{}
+
 def is_device(r: NodeRole) -> Bool:
   match r:
     case UserDevice{}:
@@ -414,6 +421,19 @@ def tailnet_data_apis.go(xs: List<&2, Container>) -> Nat:
 # The data APIs the private network reaches: the client's data API. Local and outside ones are its sources.
 def tailnet_data_apis(+s: System) -> Nat:
   tailnet_data_apis.go(containers(s))
+
+def own_data_apis.go(xs: List<&2, Container>, +ns: List<&2, Node>) -> Nat:
+  match xs:
+    case []:
+      0n
+    case c <> rest:
+      match c:
+        case Container{_, _, kind, _, on, _, _}:
+          Nat.add(one_if(is_data_api(kind) && Bool.not(is_outside(node_role(on, ns)))), own_data_apis.go(rest, ns))
+
+# The system's own data APIs: those not on someone else's servers. "Exactly one" means one store.
+def own_data_apis(+s: System) -> Nat:
+  own_data_apis.go(containers(s), nodes(s))
 
 # A data API may also host the app only while it is private.
 def shared_hosting_ok(c: Container) -> Bool:

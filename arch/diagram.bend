@@ -1,5 +1,5 @@
 import Base
-import near-architecture@0.2.0.0/arc.bend as A
+import near-architecture@0.3.0.0/arc.bend as A
 import ./canvas.bend as V
 
 # V's architecture diagram (D2), drawn by Arc.
