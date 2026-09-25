@@ -1,5 +1,5 @@
 import Base
-import near-architecture@0.4.0.0/arc.bend as A
+import near-architecture@0.5.0.0/arc.bend as A
 
 # V's deployment layer for an Arc system: services, routes, how each runs, what a change breaks,
 # and the minimality checks against a machine (launch agents, listeners). A project supplies the data.
@@ -160,7 +160,7 @@ def served_route(+k: String, xs: List<&2, Route>) -> Bool:
 # On a server, a container is on the private network exactly when it is served there; otherwise it is local.
 def exposure_honest(c: A.Container, +ss: List<&2, Service>, +rs: List<&2, Route>, +ns: List<&2, A.Node>) -> Bool:
   match c:
-    case A.Container{+k, _, _, _, on, exposure, _}:
+    case A.Container{+k, _, _, _, on, exposure, _, _}:
       Bool.not(A.is_server(A.node_role(on, ns))) || eq_bool(A.is_tailnet(exposure), served_service(k, ss) || served_route(k, rs))
 
 def all_exposure_honest(xs: List<&2, A.Container>, +ss: List<&2, Service>, +rs: List<&2, Route>, +ns: List<&2, A.Node>) -> Bool:

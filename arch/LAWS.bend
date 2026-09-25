@@ -8,6 +8,8 @@ law well_formed:
   {Arc.well_formed(V.system()) == True{} : Bool}
 law machine_private:
   {Arc.servers_private(V.system()) == True{} : Bool}
+law parts_ours:
+  {Arc.parts_ours(V.system()) == True{} : Bool}
 
 # Every package V publishes follows the hub's rules (name and version); `v deploy` also requires its LICENSE.
 law packages_ok:

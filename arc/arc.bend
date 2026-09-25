@@ -19,15 +19,17 @@ type Node is Data:
   Node{key: String, name: String, role: NodeRole}
 
 # What a container is. The list is closed: something that is none of these is not a container.
-# Client: the app, on the user's device. Network: the private network between client and server.
-# DataApi: answers queries on records and changes them. AgentsApi: runs agent threads (the harness an app drives).
+# Client: the app, on the user's device. The private overlay is a node, not a container.
+# DataApi: answers queries on records and changes them.
+# Harness: an agent harness, the loop around a model (tools, context, threads), driven over its remote-control API.
+# Proxy: forwards connections to another container, adding what it lacks, such as TLS or authentication.
 # ModelApi: answers model calls. Cli: a command a person runs. Worker: has no API of its own; it
 # only moves data between data APIs, so it is the first thing to fold into a data API's own actions.
 type ContainerKind is Data:
   Client{}
-  Network{}
   DataApi{}
-  AgentsApi{}
+  Harness{}
+  Proxy{}
   ModelApi{}
   Cli{}
   Worker{}
@@ -37,7 +39,7 @@ type Owner is Data:
   Ours{}
   Theirs{}
 
-# Who can reach it: its own machine (127.0.0.1), the local network, the private network, the device it is on, anyone.
+# Who can reach it: its own machine (127.0.0.1), the local network, the overlay, the device it is on, anyone.
 type Exposure is Data:
   Local{}
   Lan{}
@@ -49,7 +51,6 @@ type Exposure is Data:
 # may also host the app only while it is private (shared_hosting_ok).
 type Cap is Data:
   Hosting{}
-  PrivateAccess{}
   PrivateHosting{}
   Realtime{}
   BlobStore{}
@@ -64,7 +65,7 @@ type Lang is Data:
   Opaque{}
 
 type Container is Data:
-  Container{key: String, name: String, kind: ContainerKind, owner: Owner, on: String, exposure: Exposure, caps: List<&2, Cap>}
+  Container{key: String, name: String, kind: ContainerKind, owner: Owner, on: String, exposure: Exposure, caps: List<&2, Cap>, technology: List<&2, String>}
 
 type Part is Data:
   Part{key: String, name: String, lang: Lang, in: String}
@@ -104,17 +105,17 @@ def nkey(n: Node) -> String:
 
 def ckey(c: Container) -> String:
   match c:
-    case Container{k, _, _, _, _, _, _}:
+    case Container{k, _, _, _, _, _, _, _}:
       k
 
 def con(c: Container) -> String:
   match c:
-    case Container{_, _, _, _, o, _, _}:
+    case Container{_, _, _, _, o, _, _, _}:
       o
 
 def caps(c: Container) -> List<&2, Cap>:
   match c:
-    case Container{_, _, _, _, _, _, cs}:
+    case Container{_, _, _, _, _, _, cs, _}:
       cs
 
 def pkey(p: Part) -> String:
@@ -173,6 +174,33 @@ def is_device(r: NodeRole) -> Bool:
       True{}
     case _:
       False{}
+
+def is_overlay(r: NodeRole) -> Bool:
+  match r:
+    case Overlay{}:
+      True{}
+    case _:
+      False{}
+
+def one_if(b: Bool) -> Nat:
+  match b:
+    case True{}:
+      1n
+    case False{}:
+      0n
+
+def overlay_nodes.go(xs: List<&2, Node>) -> Nat:
+  match xs:
+    case []:
+      0n
+    case n <> rest:
+      match n:
+        case Node{_, _, role}:
+          Nat.add(one_if(is_overlay(role)), overlay_nodes.go(rest))
+
+# Private access is represented by exactly one Overlay node.
+def overlay_nodes(+s: System) -> Nat:
+  overlay_nodes.go(nodes(s))
 
 def is_client(k: ContainerKind) -> Bool:
   match k:
@@ -294,7 +322,7 @@ def home(+k: String, +s: System) -> String:
   pick_str(has(k, ckeys(containers(s))), k, part_home(k, parts(s)))
 
 def none() -> Container:
-  Container{"", "", Worker{}, Theirs{}, "", Public{}, []}
+  Container{"", "", Worker{}, Theirs{}, "", Public{}, [], []}
 
 def pick_c(hit: Bool, c: Container, other: Container) -> Container:
   match hit:
@@ -334,11 +362,19 @@ def node_of(+k: String, +s: System) -> String:
 def role_of(+k: String, +s: System) -> NodeRole:
   node_role(node_of(k, s), nodes(s))
 
+def container_exposure(c: Container) -> Exposure:
+  match c:
+    case Container{_, _, _, _, _, exposure, _, _}:
+      exposure
+
+def exposure_of(+k: String, +s: System) -> Exposure:
+  container_exposure(container(home(k, s), containers(s)))
+
 # ---- where it runs ----
-# On a server, everything is reachable only from the server itself or over the private network.
+# On a server, everything is reachable only from the server itself or over the overlay.
 def private_ok(c: Container, +ns: List<&2, Node>) -> Bool:
   match c:
-    case Container{_, _, _, _, on, +exposure, _}:
+    case Container{_, _, _, _, on, +exposure, _, _}:
       Bool.not(is_server(node_role(on, ns))) || is_tailnet(exposure) || is_local(exposure)
 
 def all_private(xs: List<&2, Container>, +ns: List<&2, Node>) -> Bool:
@@ -351,15 +387,16 @@ def all_private(xs: List<&2, Container>, +ns: List<&2, Node>) -> Bool:
 def servers_private(+s: System) -> Bool:
   all_private(containers(s), nodes(s))
 
-# A device reaches a server only through the private network: no link goes straight from one to the other.
+# A device reaches a server over the overlay only when the destination is exposed to the tailnet.
 def devices_via_network.go(xs: List<&2, Link>, +s: System) -> Bool:
   match xs:
     case []:
       True{}
     case l <> rest:
       match l:
-        case Link{src, dst, _, _}:
-          Bool.not(is_device(role_of(src, s)) && is_server(role_of(dst, s))) && devices_via_network.go(rest, s)
+        case Link{src, +dst, _, _}:
+          (Bool.not(is_device(role_of(src, s)) && is_server(role_of(dst, s))) ||
+            is_tailnet(exposure_of(dst, s))) && devices_via_network.go(rest, s)
 
 def devices_via_network(+s: System) -> Bool:
   devices_via_network.go(links(s), s)
@@ -369,8 +406,6 @@ def is_cap(want: Cap, c: Cap) -> Bool:
   match want c:
     case Hosting{} Hosting{}:
       True{}
-    case PrivateAccess{} PrivateAccess{}:
-      True{}
     case PrivateHosting{} PrivateHosting{}:
       True{}
     case Realtime{} Realtime{}:
@@ -379,13 +414,6 @@ def is_cap(want: Cap, c: Cap) -> Bool:
       True{}
     case _ _:
       False{}
-
-def one_if(b: Bool) -> Nat:
-  match b:
-    case True{}:
-      1n
-    case False{}:
-      0n
 
 def count_in(+want: Cap, cs: List<&2, Cap>) -> Nat:
   match cs:
@@ -401,11 +429,24 @@ def direct(+want: Cap, xs: List<&2, Container>) -> Nat:
     case c <> rest:
       Nat.add(count_in(want, caps(c)), direct(want, rest))
 
-# How many containers provide `want`. Hosting plus private access compose into private hosting.
+def tailnet_hosting.go(xs: List<&2, Container>) -> Nat:
+  match xs:
+    case []:
+      0n
+    case c <> rest:
+      match c:
+        case Container{_, _, _, _, _, exposure, cs, _}:
+          Nat.add(one_if(is_tailnet(exposure) && Nat.is_gt(count_in(Hosting{}, cs), 0n)), tailnet_hosting.go(rest))
+
+# How many containers host the app at Tailnet exposure.
+def tailnet_hosting(+s: System) -> Nat:
+  tailnet_hosting.go(containers(s))
+
+# How many containers provide `want`. One tailnet host plus one overlay composes private hosting.
 def provided(want: Cap, +s: System) -> Nat:
   match want:
     case PrivateHosting{}:
-      Nat.add(direct(PrivateHosting{}, containers(s)), one_if(Nat.is_eq(direct(Hosting{}, containers(s)), 1n) && Nat.is_eq(direct(PrivateAccess{}, containers(s)), 1n)))
+      Nat.add(direct(PrivateHosting{}, containers(s)), one_if(Nat.is_eq(tailnet_hosting(s), 1n) && Nat.is_eq(overlay_nodes(s), 1n)))
     case _:
       direct(want, containers(s))
 
@@ -415,10 +456,10 @@ def tailnet_data_apis.go(xs: List<&2, Container>) -> Nat:
       0n
     case c <> rest:
       match c:
-        case Container{_, _, kind, _, _, exposure, _}:
+        case Container{_, _, kind, _, _, exposure, _, _}:
           Nat.add(one_if(is_data_api(kind) && is_tailnet(exposure)), tailnet_data_apis.go(rest))
 
-# The data APIs the private network reaches: the client's data API. Local and outside ones are its sources.
+# The data APIs the overlay reaches: the client's data API. Local and outside ones are its sources.
 def tailnet_data_apis(+s: System) -> Nat:
   tailnet_data_apis.go(containers(s))
 
@@ -428,7 +469,7 @@ def own_data_apis.go(xs: List<&2, Container>, +ns: List<&2, Node>) -> Nat:
       0n
     case c <> rest:
       match c:
-        case Container{_, _, kind, _, on, _, _}:
+        case Container{_, _, kind, _, on, _, _, _}:
           Nat.add(one_if(is_data_api(kind) && Bool.not(is_outside(node_role(on, ns)))), own_data_apis.go(rest, ns))
 
 # The system's own data APIs: those not on someone else's servers. "Exactly one" means one store.
@@ -438,7 +479,7 @@ def own_data_apis(+s: System) -> Nat:
 # A data API may also host the app only while it is private.
 def shared_hosting_ok(c: Container) -> Bool:
   match c:
-    case Container{_, _, kind, _, _, +exposure, +cs}:
+    case Container{_, _, kind, _, _, +exposure, +cs, _}:
       Bool.not(Nat.is_gt(count_in(Hosting{}, cs), 0n) && is_data_api(kind)) || is_tailnet(exposure) || is_local(exposure)
 
 def shared_hosting_private.go(xs: List<&2, Container>) -> Bool:
@@ -454,7 +495,7 @@ def shared_hosting_private(+s: System) -> Bool:
 # ---- a goal: every part of our own non-client containers is Rust ----
 def backend(c: Container) -> Bool:
   match c:
-    case Container{_, _, kind, owner, _, _, _}:
+    case Container{_, _, kind, owner, _, _, _, _}:
       is_ours(owner) && Bool.not(is_client(kind))
 
 def rust_ok(p: Part, +s: System) -> Bool:
@@ -471,6 +512,22 @@ def all_rust.go(xs: List<&2, Part>, +s: System) -> Bool:
 
 def all_rust(+s: System) -> Bool:
   all_rust.go(parts(s), s)
+
+# Every modeled part belongs to a container we build; someone else's program is a black box.
+def container_ours(c: Container) -> Bool:
+  match c:
+    case Container{_, _, _, owner, _, _, _, _}:
+      is_ours(owner)
+
+def parts_ours.go(xs: List<&2, Part>, +s: System) -> Bool:
+  match xs:
+    case []:
+      True{}
+    case p <> rest:
+      container_ours(container(pin(p), containers(s))) && parts_ours.go(rest, s)
+
+def parts_ours(+s: System) -> Bool:
+  parts_ours.go(parts(s), s)
 
 # ---- the diagram (D2): nodes as boxes, containers inside their node, parts inside their container ----
 def path(+k: String, +s: System) -> String:
@@ -492,10 +549,17 @@ def node_boxes(xs: List<&2, Node>) -> String:
     case n <> rest:
       node_box(n) ++ node_boxes(rest)
 
+def technology_label(xs: List<&2, String>) -> String:
+  match xs:
+    case []:
+      ""
+    case _:
+      "\\n[" ++ String.join(xs, ", ") ++ "]"
+
 def container_box(c: Container) -> String:
   match c:
-    case Container{k, name, _, _, on, _, _}:
-      on ++ "." ++ k ++ ": \"" ++ name ++ "\" {class: container}\n"
+    case Container{k, name, _, _, on, _, _, technology}:
+      on ++ "." ++ k ++ ": \"" ++ name ++ technology_label(technology) ++ "\" {class: container}\n"
 
 def container_boxes(xs: List<&2, Container>) -> String:
   match xs:
