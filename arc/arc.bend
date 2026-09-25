@@ -63,12 +63,14 @@ type Exposure is Data:
   Public{}
 
 # What a container provides. Hosting is serving the app itself (its HTML and scripts); a data API
-# may also host the app only while it is private (shared_hosting_ok).
+# may also host the app only while it is private (shared_hosting_ok). Observability is receiving
+# a running container's errors, traces and structured logs.
 type Cap is Data:
   Hosting{}
   PrivateHosting{}
   Realtime{}
   BlobStore{}
+  Observability{}
 
 type Lang is Data:
   Bend{}
@@ -509,6 +511,8 @@ def is_cap(want: Cap, c: Cap) -> Bool:
       True{}
     case BlobStore{} BlobStore{}:
       True{}
+    case Observability{} Observability{}:
+      True{}
     case _ _:
       False{}
 
@@ -546,6 +550,51 @@ def provided(want: Cap, +s: System) -> Nat:
       Nat.add(direct(PrivateHosting{}, containers(s)), one_if(Nat.is_eq(tailnet_hosting(s), 1n) && Nat.is_eq(overlay_nodes(s), 1n)))
     case _:
       direct(want, containers(s))
+
+# ---- observability: everything we run reports to the observability provider ----
+def cons_if(b: Bool, k: String, xs: List<&2, String>) -> List<&2, String>:
+  match b:
+    case True{}:
+      k <> xs
+    case False{}:
+      xs
+
+# Keys of the containers that provide `want`.
+def providers(+want: Cap, xs: List<&2, Container>) -> List<&2, String>:
+  match xs:
+    case []:
+      []
+    case +c <> rest:
+      cons_if(Nat.is_gt(count_in(want, caps(c)), 0n), ckey(c), providers(want, rest))
+
+# The container a link end belongs to: a part's container, else the key itself.
+def part_container(ps: List<&2, Part>, +k: String) -> String:
+  match ps:
+    case []:
+      k
+    case +p <> rest:
+      pick_str(str_eq(k, pkey(p)), pin(p), part_container(rest, k))
+
+# Some link from container `k` (or one of its parts) reaches one of `obs`.
+def reports_to(ls: List<&2, Link>, +k: String, +ps: List<&2, Part>, +obs: List<&2, String>) -> Bool:
+  match ls:
+    case []:
+      False{}
+    case Link{src, dst, _, _} <> rest:
+      (str_eq(k, part_container(ps, src)) && has(dst, obs)) || reports_to(rest, k, ps, obs)
+
+def observed.go(xs: List<&2, Container>, +s: System, +obs: List<&2, String>) -> Bool:
+  match xs:
+    case []:
+      True{}
+    case c <> rest:
+      match c:
+        case Container{+k, _, _, owner, _, _, _, source, _, _, _, _}:
+          (Bool.not(is_ours(owner) && Bool.not(str_eq(source, ""))) || reports_to(links(s), k, parts(s), obs)) && observed.go(rest, s, obs)
+
+# Every container we build (ours, with source) links to a container providing Observability.
+def observed(+s: System) -> Bool:
+  observed.go(containers(s), s, providers(Observability{}, containers(s)))
 
 def tailnet_data_apis.go(xs: List<&2, Container>) -> Nat:
   match xs:

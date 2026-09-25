@@ -1,5 +1,5 @@
 import Base
-import near-architecture@0.7.0.0/arc.bend as A
+import near-architecture@0.8.0.0/arc.bend as A
 
 # V's deployment layer for an Arc system: services, routes, how each runs, what a change breaks,
 # and the minimality checks against a machine (launch agents, listeners). A project supplies the data.
@@ -32,6 +32,7 @@ def package_name(name: String) -> String:
     case "shadcn/ui": "shadcn/ui"
     case "Convex": "convex"
     case "OpenRouter SDK": "@openrouter/sdk"
+    case "Sentry SDK": "@sentry/nextjs"
     case "whatsmeow": "go.mau.fi/whatsmeow"
     case _: name
 
