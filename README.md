@@ -34,6 +34,13 @@ network, each capability provided exactly once, and a D2 diagram.
 
 Packages: `bend-net-json@0.3.0.0` (Tailscale's serve status), `bend-net-url@0.4.0.0` (URL decoding).
 
+## V's own architecture
+
+`arch/` describes V itself with Arc: the `v` command on your machine, the tools it drives
+(Bend, Nix, Homebrew, Tailscale, D2), and where it deploys (the Bend hub) and lives (GitHub).
+Its laws include the hub's rules for every package V publishes. Prove them with
+`bend arch/PROOF.bend`.
+
 ## A project
 
 `v` runs in a project's folder. The project describes itself with Arc and V's library and
