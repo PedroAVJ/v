@@ -376,7 +376,54 @@ def show_deployment(d: Deployment) -> String:
     case Deployment{url, stores}:
       url ++ "\n" ++ quoted_names(stores)
 
-# ---- facts `v` reads from a project: its flake host, where V's library is, its services' labels and ports ----
+# ---- where a project deploys: only what it declares runs ----
+# NixDarwin: configure a Mac with nix-darwin (its flake host). TailscaleServe: serve the plan's ports on the
+# private network. BendHub: publish the project's packages.
+type Target is Data:
+  NixDarwin{host: String}
+  TailscaleServe{}
+  BendHub{}
+
+# A package published to the Bend hub: its name, version (four numbers) and entry file (relative to the project).
+type Package is Data:
+  Package{name: String, version: String, entry: String}
+
+def digits_only(cs: List<&2, Char>) -> Bool:
+  match cs:
+    case []:
+      True{}
+    case c <> rest:
+      Char.is_digit(c) && digits_only(rest)
+
+def all_numbers(xs: List<&2, String>) -> Bool:
+  match xs:
+    case []:
+      True{}
+    case +x <> rest:
+      Bool.not(String.is_empty(x)) && digits_only(String.to_list(x)) && all_numbers(rest)
+
+def name_chars(cs: List<&2, Char>) -> Bool:
+  match cs:
+    case []:
+      True{}
+    case +c <> rest:
+      (Char.is_lower(c) || Char.is_digit(c) || Char.is_eq(c, '-')) && name_chars(rest)
+
+# The hub's rules: a name is 12 to 64 characters of a-z, 0-9 and -; a version is four numbers.
+def package_ok(p: Package) -> Bool:
+  match p:
+    case Package{+n, +v, _}:
+      Nat.is_ge(String.length(n), 12n) && Nat.is_le(String.length(n), 64n) && name_chars(String.to_list(n)) &&
+      Nat.is_eq(List.length(&2, String, String.split(v, '.')), 4n) && all_numbers(String.split(v, '.'))
+
+def packages_ok(xs: List<&2, Package>) -> Bool:
+  match xs:
+    case []:
+      True{}
+    case p <> rest:
+      package_ok(p) && packages_ok(rest)
+
+# ---- facts `v` reads from a project: where V's library is, its targets, services and packages ----
 def fact_lines(+k: String, xs: List<&2, String>) -> String:
   match xs:
     case []:
@@ -391,8 +438,33 @@ def service_ports(xs: List<&2, Service>) -> List<&2, String>:
     case s <> rest:
       U32.show(port_of(s)) <> service_ports(rest)
 
-def facts(host: String, vlib: String, rs: List<&2, Run>, ss: List<&2, Service>) -> String:
-  "host " ++ host ++ "\nvlib " ++ vlib ++ "\n" ++ fact_lines("label", run_labels(rs)) ++ fact_lines("port", service_ports(ss))
+def target_line(t: Target) -> String:
+  match t:
+    case NixDarwin{h}:
+      "target nix-darwin " ++ h ++ "\n"
+    case TailscaleServe{}:
+      "target tailscale-serve\n"
+    case BendHub{}:
+      "target bend-hub\n"
+
+def target_lines(xs: List<&2, Target>) -> String:
+  match xs:
+    case []:
+      ""
+    case t <> rest:
+      target_line(t) ++ target_lines(rest)
+
+def package_lines(xs: List<&2, Package>) -> String:
+  match xs:
+    case []:
+      ""
+    case p <> rest:
+      match p:
+        case Package{n, v, e}:
+          "package " ++ n ++ " " ++ v ++ " " ++ e ++ "\n" ++ package_lines(rest)
+
+def facts(vlib: String, ts: List<&2, Target>, rs: List<&2, Run>, ss: List<&2, Service>, ps: List<&2, Package>) -> String:
+  "vlib " ++ vlib ++ "\n" ++ target_lines(ts) ++ fact_lines("label", run_labels(rs)) ++ fact_lines("port", service_ports(ss)) ++ package_lines(ps)
 
 # ---- the nix-darwin flake: pinned inputs, the machine's module, and one launchd job per run ----
 def prog(p: Prog) -> String:

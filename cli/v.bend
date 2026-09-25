@@ -210,9 +210,10 @@ def prove() -> IO(Unit):
     +out : String <- P.check_bend("PROOF.bend")
     fail_or(String.contains(out, "All terms check."), out, IO.print("laws: all proven"))
 
+# The machine is snapshotted only for a project that configures it (a nix-darwin target).
 def check_with(+f: P.Facts) -> IO(Unit):
   do IO<Unit>:
-    snapshot(f)
+    P.when(P.has_target(f, "nix-darwin"), snapshot(f))
     prove()
 
 def check() -> IO(Unit):
@@ -269,10 +270,51 @@ def applied_text(vlib: String, url: String, stores: String) -> String:
 def current_parts(vlib: String, +c: String) -> String:
   applied_text(vlib, String.trim(S.nth(String.lines(c), 0n)), String.trim(S.nth(String.lines(c), 1n)))
 
-def deploy() -> IO(Unit):
+# ---- publishing a package to the Bend hub ----
+# The probe answers "current" (published, same files), "changed <file>", "published", or "failed <reason>".
+def publish_script(+n: String, +v: String, +e: String) -> String:
+  "n='" ++ n ++ "'; v='" ++ v ++ "'; e='" ++ e ++ "'; b=$(basename \"$e\"); d=$(dirname \"$e\"); " ++
+  "printf 'import Base\\nimport %s@%s/%s as P\\n\\ndef main() -> IO(Unit):\\n  IO.print(\"ok\")\\n' \"$n\" \"$v\" \"$b\" > /tmp/v-probe.bend; " ++
+  "if $HOME/.bend/bin/bend /tmp/v-probe.bend --check-only >/dev/null 2>&1; then " ++
+  "c=\"$HOME/.bend/lib/$(tr -d '\\n' < \"$HOME/.bend/lib/names/$n@$v\")\"; " ++
+  "for f in \"$c\"/*; do cmp -s \"$f\" \"$d/$(basename \"$f\")\" || { echo \"changed $(basename \"$f\")\"; exit 0; }; done; echo current; " ++
+  "else [ -f \"$d/LICENSE\" ] || { echo 'failed no LICENSE beside the entry'; exit 0; }; " ++
+  "out=$($HOME/.bend/bin/bend \"$e\" --publish \"$n@$v\" 2>&1); case \"$out\" in *\"published $n@$v\"*) echo published;; *) echo \"failed $(echo \"$out\" | tail -1)\";; esac; fi"
+
+def publish_other(published: Bool, +r: String, +id: String) -> IO(Unit):
+  match published:
+    case True{}:
+      IO.print("deploy   package " ++ id)
+    case False{}:
+      fail_or(False{}, "package " ++ id ++ ": " ++ S.pick(String.starts_with(r, "changed"), String.drop(r, 8n) ++ " changed since it was published; bump the version", r), IO.pure(Unit, Unit{}))
+
+def publish_current(current: Bool, +r: String, +id: String) -> IO(Unit):
+  match current:
+    case True{}:
+      IO.print("current  package " ++ id)
+    case False{}:
+      publish_other(String.starts_with(r, "published"), r, id)
+
+def publish_result(+r: String, +id: String) -> IO(Unit):
+  publish_current(String.starts_with(r, "current"), r, id)
+
+def publish(+p: String) -> IO(Unit):
   do IO<Unit>:
-    +f : P.Facts <- P.read_facts()
-    check_with(f)
+    +r : String <- X.sh(publish_script(S.nth(S.words(p), 0n), S.nth(S.words(p), 1n), S.nth(S.words(p), 2n)))
+    publish_result(String.trim(r), S.nth(S.words(p), 0n) ++ "@" ++ S.nth(S.words(p), 1n))
+
+def publish_all(ps: List<&2, String>) -> IO(Unit):
+  match ps:
+    case []:
+      IO.pure(Unit, Unit{})
+    case p <> rest:
+      do IO<Unit>:
+        publish(p)
+        publish_all(rest)
+
+# ---- deploy: prove, then run each target the project declares ----
+def nix_darwin(+f: P.Facts) -> IO(Unit):
+  do IO<Unit>:
     flake : String <- P.run_bend("flake.bend")
     X.write_file("nix/flake.nix", flake)
     mac : String <- P.run_bend("mac.gen.bend")
@@ -281,9 +323,30 @@ def deploy() -> IO(Unit):
     IO.print("deploy   nix-darwin (" ++ P.flake_host(f) ++ ")")
     +ok : Bool <- X.ok("sudo -n /run/current-system/sw/bin/darwin-rebuild switch --flake \"$(pwd)/nix#" ++ P.flake_host(f) ++ "\" >/tmp/v-rebuild.log 2>&1")
     fail_or(ok, "failed: darwin-rebuild switch (see /tmp/v-rebuild.log)", IO.pure(Unit, Unit{}))
+
+def tailscale_serve() -> IO(Unit):
+  do IO<Unit>:
     status : String <- X.sh(tailscale() ++ " serve status --json")
     plan : String <- P.run_bend("plan.bend")
     serve_steps(String.lines(plan), web_of(status))
-    +cur : String <- P.run_bend("current.bend")
-    X.write_file("applied.bend", current_parts(P.vlib_of(f), cur))
-    IO.print("deployed: " ++ String.trim(S.nth(String.lines(cur), 0n)))
+
+# A project with a deployment (current.bend) records what is now running, for the breaks law.
+def record(has: Bool, +vlib: String) -> IO(Unit):
+  match has:
+    case True{}:
+      do IO<Unit>:
+        +cur : String <- P.run_bend("current.bend")
+        X.write_file("applied.bend", current_parts(vlib, cur))
+        IO.print("deployed: " ++ String.trim(S.nth(String.lines(cur), 0n)))
+    case False{}:
+      IO.print("deployed")
+
+def deploy() -> IO(Unit):
+  do IO<Unit>:
+    +f : P.Facts <- P.read_facts()
+    check_with(f)
+    P.when(P.has_target(f, "nix-darwin"), nix_darwin(f))
+    P.when(P.has_target(f, "tailscale-serve"), tailscale_serve())
+    P.when(P.has_target(f, "bend-hub"), publish_all(P.packages_of(f)))
+    has : Bool <- X.ok("test -f current.bend")
+    record(has, P.vlib_of(f))

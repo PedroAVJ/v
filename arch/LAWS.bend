@@ -1,5 +1,6 @@
 import Base
 import near-architecture@0.2.0.0/arc.bend as Arc
+import ../lib/deploy.bend as D
 import ./canvas.bend as V
 
 # V is well formed, and what runs on the machine is reachable only from it or the private network.
@@ -8,6 +9,6 @@ law well_formed:
 law machine_private:
   {Arc.servers_private(V.system()) == True{} : Bool}
 
-# Every package V publishes has a valid hub name and ships a LICENSE.
+# Every package V publishes follows the hub's rules (name and version); `v deploy` also requires its LICENSE.
 law packages_ok:
-  {V.packages_ok(V.packages()) == True{} : Bool}
+  {D.packages_ok(V.packages()) == True{} : Bool}

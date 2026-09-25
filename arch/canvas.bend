@@ -1,8 +1,10 @@
 import Base
 import near-architecture@0.2.0.0/arc.bend as A
+import ../lib/deploy.bend as D
 
-# V's own architecture, written with Arc. V runs on the machine it manages; it deploys by
-# publishing packages to the Bend hub, and its source lives on GitHub.
+# V's own architecture, written with Arc. V deploys by publishing its packages to the Bend hub
+# (its only target); its source lives on GitHub. Nix, Homebrew and Tailscale are used only for
+# projects that declare those targets.
 
 # ---- where it runs ----
 def nodes() -> List<&2, A.Node>:
@@ -27,47 +29,23 @@ def parts() -> List<&2, A.Part>:
     A.Part{"proc", "Run-a-program effect", A.C{}, "v"} ]
 
 def links() -> List<&2, A.Link>:
-  [ A.Link{"cli", "bend", "compiles and proves the project", False{}},
-    A.Link{"cli", "nix", "darwin-rebuild · nix build", False{}},
-    A.Link{"cli", "brew", "bundle", False{}},
+  [ A.Link{"cli", "bend", "compiles, proves, publishes", False{}},
+    A.Link{"cli", "nix", "nix-darwin targets", False{}},
+    A.Link{"cli", "brew", "nix-darwin targets", False{}},
     A.Link{"cli", "d2", "diagram", False{}},
     A.Link{"cli", "lib", "", False{}},
     A.Link{"lib", "arc", "", False{}},
-    A.Link{"cli", "tailscale", "serve", False{}},
+    A.Link{"cli", "tailscale", "tailscale-serve targets", False{}},
     A.Link{"cli", "proc", "runs programs", False{}},
-    A.Link{"arc", "hub", "publish", False{}},
+    A.Link{"arc", "hub", "bend-hub target (V's own)", False{}},
     A.Link{"v", "github", "source", False{}} ]
 
 def system() -> A.System:
   A.System{nodes(), near(), parts(), links()}
 
-# ---- what V publishes to the hub ----
-type Package is Data:
-  Package{name: String, version: String, files: List<&2, String>}
+# ---- how V deploys: it publishes its packages to the Bend hub ----
+def targets() -> List<&2, D.Target>:
+  [D.BendHub{}]
 
-def packages() -> List<&2, Package>:
-  [ Package{"near-architecture", "0.2.0.0", ["arc/arc.bend", "arc/LICENSE"]} ]
-
-# The hub's rule: a name is 12 to 64 characters of a-z, 0-9 and -.
-def name_ok(+n: String) -> Bool:
-  Nat.is_ge(String.length(n), 12n) && Nat.is_le(String.length(n), 64n)
-
-def ends_license(+f: String) -> Bool:
-  String.ends_with(f, "/LICENSE") || String.eq(f, "LICENSE")
-
-def any_license(fs: List<&2, String>) -> Bool:
-  match fs:
-    case []:
-      False{}
-    case f <> rest:
-      ends_license(f) || any_license(rest)
-
-# Every package has a valid hub name and ships a LICENSE.
-def packages_ok(xs: List<&2, Package>) -> Bool:
-  match xs:
-    case []:
-      True{}
-    case p <> rest:
-      match p:
-        case Package{n, _, fs}:
-          name_ok(n) && any_license(fs) && packages_ok(rest)
+def packages() -> List<&2, D.Package>:
+  [ D.Package{"near-architecture", "0.2.0.0", "../arc/arc.bend"} ]

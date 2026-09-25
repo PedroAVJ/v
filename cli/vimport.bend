@@ -304,6 +304,7 @@ def write_declared(missing: Bool, +vlib: String, +settings: List<&2, String>, +f
 def import_mac() -> IO(Unit):
   do IO<Unit>:
     +f : P.Facts <- P.read_facts()
+    P.when(Bool.not(P.has_target(f, "nix-darwin")), IO.die(Unit, 1, "import reads a Mac for a nix-darwin target; this project declares none"))
     opts : String <- X.sh("cat nix/options.tsv")
     prefs : List<&2, String> <- option_lines(String.lines(opts))
     pm : String <- X.sh("pmset -g custom")
