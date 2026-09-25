@@ -175,3 +175,37 @@ def identities_in_domain(xs: List<&2, Identity>, +domain: String) -> Bool:
       match x:
         case Identity{_, name}:
           in_domain(name, domain) && identities_in_domain(rest, domain)
+
+# What a project declares it needs on one scope (a resource group); [] means no access at all.
+type Need is Data:
+  Need{scope: String, actions: List<&2, String>}
+
+def need_scopes(ns: List<&2, Need>) -> List<&2, String>:
+  match ns:
+    case []: []
+    case n <> rest:
+      match n:
+        case Need{scope, _}: scope <> need_scopes(rest)
+
+def needs_met(ns: List<&2, Need>, +actual: List<&2, Permission>) -> Bool:
+  match ns:
+    case []: True{}
+    case n <> rest:
+      match n:
+        case Need{scope, acts}: permissions_equal(scope, acts, actual) && needs_met(rest, actual)
+
+def pick_actions(hit: Bool, acts: List<&2, String>, rest: List<&2, String>) -> List<&2, String>:
+  match hit:
+    case True{}: acts
+    case False{}: rest
+
+def need_actions(+scope: String, ns: List<&2, Need>) -> List<&2, String>:
+  match ns:
+    case []: []
+    case n <> rest:
+      match n:
+        case Need{s, acts}: pick_actions(String.eq(scope, s), acts, need_actions(scope, rest))
+
+# One scope's effective permissions are exactly what the project declares it needs there.
+def scope_minimal(+scope: String, +ns: List<&2, Need>, +actual: List<&2, Permission>) -> Bool:
+  permissions_equal(scope, need_actions(scope, ns), actual)
