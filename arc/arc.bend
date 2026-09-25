@@ -20,14 +20,14 @@ type Node is Data:
 
 # What a container is. The list is closed: something that is none of these is not a container.
 # Client: the app, on the user's device. Network: the private network between client and server.
-# DataApi: answers queries on records and changes them. AgentApi: runs agent threads.
+# DataApi: answers queries on records and changes them. AgentsApi: runs agent threads (the harness an app drives).
 # ModelApi: answers model calls. Cli: a command a person runs. Worker: has no API of its own; it
 # only moves data between data APIs, so it is the first thing to fold into a data API's own actions.
 type ContainerKind is Data:
   Client{}
   Network{}
   DataApi{}
-  AgentApi{}
+  AgentsApi{}
   ModelApi{}
   Cli{}
   Worker{}

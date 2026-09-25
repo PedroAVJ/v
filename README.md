@@ -14,7 +14,7 @@ hierarchies over the same containers:
 - **Where it runs:** node → container → part. Nodes are yours to declare, each with a
   role: `UserDevice`, `Server`, `Overlay` (the private network) or `Outside`.
 - **What it is:** system → container → part. A container is one of a closed list of
-  kinds (`Client`, `Network`, `DataApi`, `AgentApi`, `ModelApi`, `Worker`), `Ours` or
+  kinds (`Client`, `Network`, `DataApi`, `AgentsApi`, `ModelApi`, `Worker`), `Ours` or
   `Theirs`, with an exposure (`Local`, `Lan`, `Tailnet`, `Device`, `Public`) and the
   capabilities it provides.
 
