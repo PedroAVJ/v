@@ -1,5 +1,5 @@
 import Base
-import near-architecture@0.5.0.0/arc.bend as A
+import near-architecture@0.6.0.0/arc.bend as A
 
 # V's deployment layer for an Arc system: services, routes, how each runs, what a change breaks,
 # and the minimality checks against a machine (launch agents, listeners). A project supplies the data.
@@ -9,6 +9,120 @@ def str_eq(a: String, b: String) -> Bool:
 
 def has(+s: String, xs: List<&2, String>) -> Bool:
   A.has(s, xs)
+
+# A declared stack item or source extension that is still being migrated.
+type Migration is Data:
+  Migration{container: String, missing: String}
+
+def migration(+key: String, +name: String, xs: List<&2, Migration>) -> Bool:
+  match xs:
+    case []:
+      False{}
+    case m <> rest:
+      match m:
+        case Migration{k, n}:
+          (str_eq(key, k) && str_eq(name, n)) || migration(key, name, rest)
+
+# Names on a canvas are readable names; snapshots record package names.
+def package_name(name: String) -> String:
+  match name:
+    case "Next.js": "next"
+    case "Tailwind CSS": "tailwindcss"
+    case "React": "react"
+    case "shadcn/ui": "shadcn/ui"
+    case "Convex": "convex"
+    case "OpenRouter SDK": "@openrouter/sdk"
+    case "whatsmeow": "go.mau.fi/whatsmeow"
+    case _: name
+
+def stack_item(+key: String, +name: String, +deps: List<&2, String>, +ms: List<&2, Migration>) -> Bool:
+  has(key ++ ":" ++ package_name(name), deps) || migration(key, name, ms)
+
+def stack_items(+key: String, xs: List<&2, String>, +deps: List<&2, String>, +ms: List<&2, Migration>) -> Bool:
+  match xs:
+    case []:
+      True{}
+    case name <> rest:
+      stack_item(key, name, deps, ms) && stack_items(key, rest, deps, ms)
+
+def container_stack(c: A.Container, +deps: List<&2, String>, +ms: List<&2, Migration>) -> Bool:
+  match c:
+    case A.Container{+key, _, _, _, _, _, _, source, _, frameworks, libraries, _}:
+      String.is_empty(source) || (stack_items(key, frameworks, deps, ms) && stack_items(key, libraries, deps, ms))
+
+def containers_stack(xs: List<&2, A.Container>, +deps: List<&2, String>, +ms: List<&2, Migration>) -> Bool:
+  match xs:
+    case []:
+      True{}
+    case c <> rest:
+      container_stack(c, deps, ms) && containers_stack(rest, deps, ms)
+
+# A source container calling a model API needs the API's declared SDK.
+def model_sdk_caller(caller: A.Container, sdk: List<&2, String>, +deps: List<&2, String>, +ms: List<&2, Migration>) -> Bool:
+  match caller:
+    case A.Container{key, _, _, _, _, _, _, source, _, _, _, _}:
+      String.is_empty(source) || stack_items(key, sdk, deps, ms)
+
+def model_sdk_target(target: A.Container, caller: A.Container, +deps: List<&2, String>, +ms: List<&2, Migration>) -> Bool:
+  match target:
+    case A.Container{_, _, A.ModelApi{}, _, _, _, _, _, _, _, sdk, _}:
+      model_sdk_caller(caller, sdk, deps, ms)
+    case _:
+      True{}
+
+def model_sdk(link: A.Link, +s: A.System, +deps: List<&2, String>, +ms: List<&2, Migration>) -> Bool:
+  match link:
+    case A.Link{src, dst, _, _}:
+      model_sdk_target(A.container(A.home(dst, s), A.containers(s)), A.container(A.home(src, s), A.containers(s)), deps, ms)
+
+def model_sdks(xs: List<&2, A.Link>, +s: A.System, +deps: List<&2, String>, +ms: List<&2, Migration>) -> Bool:
+  match xs:
+    case []:
+      True{}
+    case link <> rest:
+      model_sdk(link, s, deps, ms) && model_sdks(rest, s, deps, ms)
+
+def stack_present(+s: A.System, +deps: List<&2, String>, +ms: List<&2, Migration>) -> Bool:
+  containers_stack(A.containers(s), deps, ms) && model_sdks(A.links(s), s, deps, ms)
+
+def language_extension(+name: String, +ext: String) -> Bool:
+  (str_eq(name, "TypeScript") && (str_eq(ext, ".ts") || str_eq(ext, ".tsx"))) ||
+  (str_eq(name, "Go") && str_eq(ext, ".go")) ||
+  (str_eq(name, "JavaScript") && (str_eq(ext, ".js") || str_eq(ext, ".mjs") || str_eq(ext, ".jsx"))) ||
+  (str_eq(name, "Python") && str_eq(ext, ".py"))
+
+def any_language(+ext: String, xs: List<&2, String>) -> Bool:
+  match xs:
+    case []:
+      False{}
+    case name <> rest:
+      language_extension(name, ext) || any_language(ext, rest)
+
+def extension_ok(+key: String, fields: List<&2, String>, +languages: List<&2, String>, +ms: List<&2, Migration>) -> Bool:
+  match fields:
+    case k <> +ext <> _:
+      Bool.not(str_eq(key, k)) || any_language(ext, languages) || migration(key, ext, ms)
+    case _:
+      True{}
+
+def extensions_ok(+key: String, xs: List<&2, String>, +languages: List<&2, String>, +ms: List<&2, Migration>) -> Bool:
+  match xs:
+    case []:
+      True{}
+    case entry <> rest:
+      extension_ok(key, String.split(entry, ':'), languages, ms) && extensions_ok(key, rest, languages, ms)
+
+def container_languages(c: A.Container, +extensions: List<&2, String>, +ms: List<&2, Migration>) -> Bool:
+  match c:
+    case A.Container{key, _, _, _, _, _, _, source, _, _, _, languages}:
+      String.is_empty(source) || extensions_ok(key, extensions, languages, ms)
+
+def stack_languages(xs: List<&2, A.Container>, +extensions: List<&2, String>, +ms: List<&2, Migration>) -> Bool:
+  match xs:
+    case []:
+      True{}
+    case c <> rest:
+      container_languages(c, extensions, ms) && stack_languages(rest, extensions, ms)
 
 # ---- deployment facts ----
 # The address a system is reached at, and the data stores that must survive.
@@ -160,7 +274,7 @@ def served_route(+k: String, xs: List<&2, Route>) -> Bool:
 # On a server, a container is on the private network exactly when it is served there; otherwise it is local.
 def exposure_honest(c: A.Container, +ss: List<&2, Service>, +rs: List<&2, Route>, +ns: List<&2, A.Node>) -> Bool:
   match c:
-    case A.Container{+k, _, _, _, on, exposure, _, _}:
+    case A.Container{+k, _, _, _, on, exposure, _, _, _, _, _, _}:
       Bool.not(A.is_server(A.node_role(on, ns))) || eq_bool(A.is_tailnet(exposure), served_service(k, ss) || served_route(k, rs))
 
 def all_exposure_honest(xs: List<&2, A.Container>, +ss: List<&2, Service>, +rs: List<&2, Route>, +ns: List<&2, A.Node>) -> Bool:
@@ -463,8 +577,24 @@ def package_lines(xs: List<&2, Package>) -> String:
         case Package{n, v, e}:
           "package " ++ n ++ " " ++ v ++ " " ++ e ++ "\n" ++ package_lines(rest)
 
-def facts(vlib: String, ts: List<&2, Target>, rs: List<&2, Run>, ss: List<&2, Service>, ps: List<&2, Package>) -> String:
-  "vlib " ++ vlib ++ "\n" ++ target_lines(ts) ++ fact_lines("label", run_labels(rs)) ++ fact_lines("port", service_ports(ss)) ++ package_lines(ps)
+def source_line(empty: Bool, key: String, source: String) -> String:
+  match empty:
+    case True{}:
+      ""
+    case False{}:
+      "source " ++ key ++ " " ++ source ++ "\n"
+
+def source_lines(xs: List<&2, A.Container>) -> String:
+  match xs:
+    case []:
+      ""
+    case c <> rest:
+      match c:
+        case A.Container{key, _, _, _, _, _, _, +source, _, _, _, _}:
+          source_line(String.is_empty(source), key, source) ++ source_lines(rest)
+
+def facts(vlib: String, ts: List<&2, Target>, rs: List<&2, Run>, ss: List<&2, Service>, ps: List<&2, Package>, cs: List<&2, A.Container>) -> String:
+  "vlib " ++ vlib ++ "\n" ++ target_lines(ts) ++ fact_lines("label", run_labels(rs)) ++ fact_lines("port", service_ports(ss)) ++ package_lines(ps) ++ source_lines(cs)
 
 # ---- the nix-darwin flake: pinned inputs, the machine's module, and one launchd job per run ----
 def prog(p: Prog) -> String:

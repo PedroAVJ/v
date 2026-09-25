@@ -15,7 +15,7 @@ def check_bend(file: String) -> IO(String):
 
 # ---- the project's facts (facts.bend): where V's library is, its targets, services and packages ----
 type Facts is Data:
-  Facts{vlib: String, targets: List<&2, String>, labels: List<&2, String>, ports: List<&2, String>, packages: List<&2, String>}
+  Facts{vlib: String, targets: List<&2, String>, labels: List<&2, String>, ports: List<&2, String>, packages: List<&2, String>, sources: List<&2, String>}
 
 def fact_values(+k: String, ls: List<&2, String>) -> List<&2, String>:
   match ls:
@@ -28,32 +28,37 @@ def read_facts() -> IO(Facts):
   do IO<Facts>:
     out : String <- run_bend("facts.bend")
     +ls : List<&2, String> = String.lines(out)
-    return Facts{S.nth(fact_values("vlib", ls), 0n), fact_values("target", ls), fact_values("label", ls), fact_values("port", ls), fact_values("package", ls)}
+    return Facts{S.nth(fact_values("vlib", ls), 0n), fact_values("target", ls), fact_values("label", ls), fact_values("port", ls), fact_values("package", ls), fact_values("source", ls)}
 
 def vlib_of(f: Facts) -> String:
   match f:
-    case Facts{v, _, _, _, _}:
+    case Facts{v, _, _, _, _, _}:
       v
 
 def targets_of(f: Facts) -> List<&2, String>:
   match f:
-    case Facts{_, t, _, _, _}:
+    case Facts{_, t, _, _, _, _}:
       t
 
 def labels_of(f: Facts) -> List<&2, String>:
   match f:
-    case Facts{_, _, l, _, _}:
+    case Facts{_, _, l, _, _, _}:
       l
 
 def ports_of(f: Facts) -> List<&2, String>:
   match f:
-    case Facts{_, _, _, p, _}:
+    case Facts{_, _, _, p, _, _}:
       p
 
 def packages_of(f: Facts) -> List<&2, String>:
   match f:
-    case Facts{_, _, _, _, p}:
+    case Facts{_, _, _, _, p, _}:
       p
+
+def sources_of(f: Facts) -> List<&2, String>:
+  match f:
+    case Facts{_, _, _, _, _, sources}:
+      sources
 
 def target_hit(+name: String, ts: List<&2, String>) -> Bool:
   match ts:

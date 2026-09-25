@@ -13,14 +13,14 @@ def nodes() -> List<&2, A.Node>:
 
 # ---- what it is ----
 def near() -> List<&2, A.Container>:
-  [ A.Container{"v", "v", A.Cli{}, A.Ours{}, "machine", A.Local{}, [], ["Bend 2", "C"]},
-    A.Container{"bend", "Bend", A.Cli{}, A.Theirs{}, "machine", A.Local{}, [], ["Bend 2"]},
-    A.Container{"nix", "Nix · nix-darwin", A.Cli{}, A.Theirs{}, "machine", A.Local{}, [], ["Nix", "nix-darwin"]},
-    A.Container{"brew", "Homebrew", A.Cli{}, A.Theirs{}, "machine", A.Local{}, [], ["Homebrew"]},
-    A.Container{"d2", "D2", A.Cli{}, A.Theirs{}, "machine", A.Local{}, [], ["D2"]},
-    A.Container{"tailscale", "Tailscale", A.Cli{}, A.Theirs{}, "machine", A.Local{}, [], ["Tailscale"]},
-    A.Container{"hub", "Bend hub", A.DataApi{}, A.Theirs{}, "outside", A.Public{}, [], ["Bend hub"]},
-    A.Container{"github", "GitHub", A.DataApi{}, A.Theirs{}, "outside", A.Public{}, [], ["GitHub"]} ]
+  [ A.Container{"v", "v", A.Cli{}, A.Ours{}, "machine", A.Local{}, [], "", [], [], [], ["Bend 2", "C"]},
+    A.Container{"bend", "Bend", A.Cli{}, A.Theirs{}, "machine", A.Local{}, [], "", [], [], [], ["Bend 2"]},
+    A.Container{"nix", "Nix · nix-darwin", A.Cli{}, A.Theirs{}, "machine", A.Local{}, [], "", [], ["Nix", "nix-darwin"], [], []},
+    A.Container{"brew", "Homebrew", A.Cli{}, A.Theirs{}, "machine", A.Local{}, [], "", ["Homebrew"], [], [], []},
+    A.Container{"d2", "D2", A.Cli{}, A.Theirs{}, "machine", A.Local{}, [], "", ["D2"], [], [], []},
+    A.Container{"tailscale", "Tailscale", A.Cli{}, A.Theirs{}, "machine", A.Local{}, [], "", ["Tailscale"], [], [], []},
+    A.Container{"hub", "Bend hub", A.DataApi{}, A.Theirs{}, "outside", A.Public{}, [], "", ["Bend hub"], [], [], []},
+    A.Container{"github", "GitHub", A.DataApi{}, A.Theirs{}, "outside", A.Public{}, [], "", ["GitHub"], [], [], []} ]
 
 def parts() -> List<&2, A.Part>:
   [ A.Part{"cli", "v command (check, import, dryrun, plan, deploy, diagram)", A.Bend{}, "v"},
@@ -48,4 +48,4 @@ def targets() -> List<&2, D.Target>:
   [D.BendHub{}]
 
 def packages() -> List<&2, D.Package>:
-  [ D.Package{"near-architecture", "0.5.0.0", "../arc/arc.bend"} ]
+  [ D.Package{"near-architecture", "0.6.0.0", "../arc/arc.bend"} ]

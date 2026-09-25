@@ -170,7 +170,100 @@ def agent_labels(ls: List<&2, String>) -> List<&2, String>:
     case l <> rest:
       S.append(agent_if(S.nth(String.split(l, '\t'), 2n)), agent_labels(rest))
 
-def machine_text(ports: List<&2, String>, serves: List<&2, String>, agents: List<&2, String>, installed: List<&2, String>, exposed: List<&2, String>) -> String:
+# Repository evidence is captured beside the machine facts. A source line is "key folder".
+type Stack is Data:
+  Stack{deps: List<&2, String>, extensions: List<&2, String>}
+
+def prefix(+key: String, xs: List<&2, String>) -> List<&2, String>:
+  match xs:
+    case []:
+      []
+    case x <> rest:
+      (key ++ ":" ++ x) <> prefix(key, rest)
+
+def package_deps(+v: Json.Val) -> List<&2, String>:
+  List.append(&2, String, obj_keys(at(v, "dependencies")), obj_keys(at(v, "devDependencies")))
+
+def choose_package(empty: Bool, local: String, root: Json.Val) -> Json.Val:
+  match empty:
+    case True{}:
+      root
+    case False{}:
+      json_or_null(Json.parse(local))
+
+def package_or_root(+local: String, root: Json.Val) -> Json.Val:
+  choose_package(String.is_empty(local), local, root)
+
+def module_name(line: String) -> String:
+  +words : List<&2, String> = S.words(String.trim(line))
+  +first : String = S.nth(words, 0n)
+  +second : String = S.nth(words, 1n)
+  S.pick(String.eq(first, "require") && String.starts_with(S.nth(words, 2n), "v"), second,
+    S.pick(String.starts_with(second, "v") && Bool.not(String.eq(first, "module")), first, ""))
+
+def go_deps(ls: List<&2, String>) -> List<&2, String>:
+  match ls:
+    case []:
+      []
+    case +l <> rest:
+      S.append(port_if(Bool.not(String.is_empty(module_name(l))), module_name(l)), go_deps(rest))
+
+def source_ext(path: String) -> String:
+  +name : String = S.last(String.split(path, '/'))
+  +ext : String = "." ++ S.last(String.split(name, '.'))
+  S.pick(Bool.not(String.contains(name, ".generated.")) &&
+    (String.eq(ext, ".ts") || String.eq(ext, ".tsx") || String.eq(ext, ".js") ||
+     String.eq(ext, ".jsx") || String.eq(ext, ".mjs") || String.eq(ext, ".go") || String.eq(ext, ".py")), ext, "")
+
+def source_extensions(paths: List<&2, String>) -> List<&2, String>:
+  match paths:
+    case []:
+      []
+    case +p <> rest:
+      S.append(port_if(Bool.not(String.is_empty(source_ext(p))), source_ext(p)), source_extensions(rest))
+
+def stack_source(+line: String, root_json: Json.Val, +go: List<&2, String>) -> IO(Stack):
+  do IO<Stack>:
+    +key : String = S.nth(S.words(line), 0n)
+    +source : String = S.nth(S.words(line), 1n)
+    local_json : String <- X.sh("cat '../" ++ source ++ "/../package.json' 2>/dev/null")
+    components : String <- X.sh("test -f '../" ++ source ++ "/../components.json' && echo shadcn/ui")
+    files : String <- X.sh("find '../" ++ source ++ "' -type d \\( -name node_modules -o -name _generated \\) -prune -o -type f -print 2>/dev/null")
+    +json : Json.Val = package_or_root(local_json, root_json)
+    +deps : List<&2, String> = S.dedupe(List.append(&2, String, package_deps(json), List.append(&2, String, go, S.nonempty(String.lines(components)))))
+    return Stack{prefix(key, deps), prefix(key, S.dedupe(source_extensions(String.lines(files))))}
+
+def join_stack(a: Stack, b: Stack) -> Stack:
+  match a:
+    case Stack{ds, es}:
+      match b:
+        case Stack{mds, mes}:
+          Stack{List.append(&2, String, ds, mds), List.append(&2, String, es, mes)}
+
+def stack_sources(lines: List<&2, String>, +root_json: Json.Val, +go: List<&2, String>) -> IO(Stack):
+  match lines:
+    case []:
+      IO.pure(Stack, Stack{[], []})
+    case line <> rest:
+      do IO<Stack>:
+        +one : Stack <- stack_source(line, root_json, go)
+        +more : Stack <- stack_sources(rest, root_json, go)
+        return join_stack(one, more)
+
+def repository_stack(sources: List<&2, String>) -> IO(Stack):
+  do IO<Stack>:
+    package : String <- X.sh("cat ../package.json 2>/dev/null")
+    go : String <- X.sh("cat ../go.mod 2>/dev/null")
+    stack_sources(sources, json_or_null(Json.parse(package)), go_deps(String.lines(go)))
+
+def stack_text(stack: Stack) -> String:
+  match stack:
+    case Stack{deps, extensions}:
+      "# Package dependencies and source extensions by container key.\n" ++
+      "def deps() -> List<&2, String>:\n  [" ++ S.quote_all(deps) ++ "]\n\n" ++
+      "def extensions() -> List<&2, String>:\n  [" ++ S.quote_all(extensions) ++ "]\n"
+
+def machine_text(ports: List<&2, String>, serves: List<&2, String>, agents: List<&2, String>, installed: List<&2, String>, exposed: List<&2, String>, stack: Stack) -> String:
   "import Base\n\n# The machine as it was when `v snapshot` ran. Generated; do not edit.\n\n" ++
   "def foreign_ports() -> List<&2, U32>:\n  [" ++ String.join(ports, ", ") ++ "]\n\n" ++
   "def foreign_serves() -> List<&2, U32>:\n  [" ++ String.join(serves, ", ") ++ "]\n\n" ++
@@ -178,7 +271,7 @@ def machine_text(ports: List<&2, String>, serves: List<&2, String>, agents: List
   "# Launch agents V itself installed at the last deploy (nix-darwin's current generation); the next deploy reconciles them.\n" ++
   "def installed() -> List<&2, String>:\n  [" ++ S.quote_all(installed) ++ "]\n\n" ++
   "# Programs listening beyond 127.0.0.1 (\"process port\"): reachable from other machines.\n" ++
-  "def exposed() -> List<&2, String>:\n  [" ++ S.quote_all(exposed) ++ "]\n"
+  "def exposed() -> List<&2, String>:\n  [" ++ S.quote_all(exposed) ++ "]\n\n" ++ stack_text(stack)
 
 def snapshot(+f: P.Facts) -> IO(Unit):
   do IO<Unit>:
@@ -193,7 +286,8 @@ def snapshot(+f: P.Facts) -> IO(Unit):
     +web : Json.Val = web_of(serve)
     +serves : List<&2, String> = web_serves(web, obj_keys(web), S.append(P.ports_of(f), owned_ports(sockets, owned)))
     +agents : List<&2, String> = agent_labels(List.drop(&2, String, String.lines(list), 1n))
-    X.write_file("machine.bend", machine_text(ports, serves, agents, S.nonempty(String.lines(inst)), S.dedupe(exposed(sockets))))
+    +stack : Stack <- repository_stack(P.sources_of(f))
+    X.write_file("machine.bend", machine_text(ports, serves, agents, S.nonempty(String.lines(inst)), S.dedupe(exposed(sockets)), stack))
     IO.print("snapshot: " ++ Nat.show(S.count(ports)) ++ " foreign ports, " ++ Nat.show(S.count(serves)) ++ " foreign serves, " ++ Nat.show(S.count(agents)) ++ " launch agents")
 
 # ---- check, plan, diagram ----

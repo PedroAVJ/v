@@ -65,7 +65,7 @@ type Lang is Data:
   Opaque{}
 
 type Container is Data:
-  Container{key: String, name: String, kind: ContainerKind, owner: Owner, on: String, exposure: Exposure, caps: List<&2, Cap>, technology: List<&2, String>}
+  Container{key: String, name: String, kind: ContainerKind, owner: Owner, on: String, exposure: Exposure, caps: List<&2, Cap>, source: String, vendors: List<&2, String>, frameworks: List<&2, String>, libraries: List<&2, String>, languages: List<&2, String>}
 
 type Part is Data:
   Part{key: String, name: String, lang: Lang, in: String}
@@ -105,17 +105,17 @@ def nkey(n: Node) -> String:
 
 def ckey(c: Container) -> String:
   match c:
-    case Container{k, _, _, _, _, _, _, _}:
+    case Container{k, _, _, _, _, _, _, _, _, _, _, _}:
       k
 
 def con(c: Container) -> String:
   match c:
-    case Container{_, _, _, _, o, _, _, _}:
+    case Container{_, _, _, _, o, _, _, _, _, _, _, _}:
       o
 
 def caps(c: Container) -> List<&2, Cap>:
   match c:
-    case Container{_, _, _, _, _, _, cs, _}:
+    case Container{_, _, _, _, _, _, cs, _, _, _, _, _}:
       cs
 
 def pkey(p: Part) -> String:
@@ -322,7 +322,7 @@ def home(+k: String, +s: System) -> String:
   pick_str(has(k, ckeys(containers(s))), k, part_home(k, parts(s)))
 
 def none() -> Container:
-  Container{"", "", Worker{}, Theirs{}, "", Public{}, [], []}
+  Container{"", "", Worker{}, Theirs{}, "", Public{}, [], "", [], [], [], []}
 
 def pick_c(hit: Bool, c: Container, other: Container) -> Container:
   match hit:
@@ -364,7 +364,7 @@ def role_of(+k: String, +s: System) -> NodeRole:
 
 def container_exposure(c: Container) -> Exposure:
   match c:
-    case Container{_, _, _, _, _, exposure, _, _}:
+    case Container{_, _, _, _, _, exposure, _, _, _, _, _, _}:
       exposure
 
 def exposure_of(+k: String, +s: System) -> Exposure:
@@ -374,7 +374,7 @@ def exposure_of(+k: String, +s: System) -> Exposure:
 # On a server, everything is reachable only from the server itself or over the overlay.
 def private_ok(c: Container, +ns: List<&2, Node>) -> Bool:
   match c:
-    case Container{_, _, _, _, on, +exposure, _, _}:
+    case Container{_, _, _, _, on, +exposure, _, _, _, _, _, _}:
       Bool.not(is_server(node_role(on, ns))) || is_tailnet(exposure) || is_local(exposure)
 
 def all_private(xs: List<&2, Container>, +ns: List<&2, Node>) -> Bool:
@@ -435,7 +435,7 @@ def tailnet_hosting.go(xs: List<&2, Container>) -> Nat:
       0n
     case c <> rest:
       match c:
-        case Container{_, _, _, _, _, exposure, cs, _}:
+        case Container{_, _, _, _, _, exposure, cs, _, _, _, _, _}:
           Nat.add(one_if(is_tailnet(exposure) && Nat.is_gt(count_in(Hosting{}, cs), 0n)), tailnet_hosting.go(rest))
 
 # How many containers host the app at Tailnet exposure.
@@ -456,7 +456,7 @@ def tailnet_data_apis.go(xs: List<&2, Container>) -> Nat:
       0n
     case c <> rest:
       match c:
-        case Container{_, _, kind, _, _, exposure, _, _}:
+        case Container{_, _, kind, _, _, exposure, _, _, _, _, _, _}:
           Nat.add(one_if(is_data_api(kind) && is_tailnet(exposure)), tailnet_data_apis.go(rest))
 
 # The data APIs the overlay reaches: the client's data API. Local and outside ones are its sources.
@@ -469,7 +469,7 @@ def own_data_apis.go(xs: List<&2, Container>, +ns: List<&2, Node>) -> Nat:
       0n
     case c <> rest:
       match c:
-        case Container{_, _, kind, _, on, _, _, _}:
+        case Container{_, _, kind, _, on, _, _, _, _, _, _, _}:
           Nat.add(one_if(is_data_api(kind) && Bool.not(is_outside(node_role(on, ns)))), own_data_apis.go(rest, ns))
 
 # The system's own data APIs: those not on someone else's servers. "Exactly one" means one store.
@@ -479,7 +479,7 @@ def own_data_apis(+s: System) -> Nat:
 # A data API may also host the app only while it is private.
 def shared_hosting_ok(c: Container) -> Bool:
   match c:
-    case Container{_, _, kind, _, _, +exposure, +cs, _}:
+    case Container{_, _, kind, _, _, +exposure, +cs, _, _, _, _, _}:
       Bool.not(Nat.is_gt(count_in(Hosting{}, cs), 0n) && is_data_api(kind)) || is_tailnet(exposure) || is_local(exposure)
 
 def shared_hosting_private.go(xs: List<&2, Container>) -> Bool:
@@ -495,7 +495,7 @@ def shared_hosting_private(+s: System) -> Bool:
 # ---- a goal: every part of our own non-client containers is Rust ----
 def backend(c: Container) -> Bool:
   match c:
-    case Container{_, _, kind, owner, _, _, _, _}:
+    case Container{_, _, kind, owner, _, _, _, _, _, _, _, _}:
       is_ours(owner) && Bool.not(is_client(kind))
 
 def rust_ok(p: Part, +s: System) -> Bool:
@@ -516,7 +516,7 @@ def all_rust(+s: System) -> Bool:
 # Every modeled part belongs to a container we build; someone else's program is a black box.
 def container_ours(c: Container) -> Bool:
   match c:
-    case Container{_, _, _, owner, _, _, _, _}:
+    case Container{_, _, _, owner, _, _, _, _, _, _, _, _}:
       is_ours(owner)
 
 def parts_ours.go(xs: List<&2, Part>, +s: System) -> Bool:
@@ -549,17 +549,25 @@ def node_boxes(xs: List<&2, Node>) -> String:
     case n <> rest:
       node_box(n) ++ node_boxes(rest)
 
-def technology_label(xs: List<&2, String>) -> String:
-  match xs:
+def stack_label(frameworks: List<&2, String>, libraries: List<&2, String>) -> String:
+  match frameworks:
     case []:
-      ""
+      match libraries:
+        case []:
+          ""
+        case _:
+          "\\n[" ++ String.join(libraries, ", ") ++ "]"
     case _:
-      "\\n[" ++ String.join(xs, ", ") ++ "]"
+      match libraries:
+        case []:
+          "\\n[" ++ String.join(frameworks, ", ") ++ "]"
+        case _:
+          "\\n[" ++ String.join(frameworks, ", ") ++ " · " ++ String.join(libraries, ", ") ++ "]"
 
 def container_box(c: Container) -> String:
   match c:
-    case Container{k, name, _, _, on, _, _, technology}:
-      on ++ "." ++ k ++ ": \"" ++ name ++ technology_label(technology) ++ "\" {class: container}\n"
+    case Container{k, name, _, _, on, _, _, _, _, frameworks, libraries, _}:
+      on ++ "." ++ k ++ ": \"" ++ name ++ stack_label(frameworks, libraries) ++ "\" {class: container}\n"
 
 def container_boxes(xs: List<&2, Container>) -> String:
   match xs:
