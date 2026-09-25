@@ -1,4 +1,5 @@
 import Base
+import near-architecture@0.9.0.0/arc.bend as Arc
 
 # Public metadata and effective ARM permission patterns only. No credential values.
 type Resource is Data:
@@ -176,36 +177,16 @@ def identities_in_domain(xs: List<&2, Identity>, +domain: String) -> Bool:
         case Identity{_, name}:
           in_domain(name, domain) && identities_in_domain(rest, domain)
 
-# What a project declares it needs on one scope (a resource group); [] means no access at all.
-type Need is Data:
-  Need{scope: String, actions: List<&2, String>}
-
-def need_scopes(ns: List<&2, Need>) -> List<&2, String>:
-  match ns:
+def identity_names(xs: List<&2, Identity>) -> List<&2, String>:
+  match xs:
     case []: []
-    case n <> rest:
-      match n:
-        case Need{scope, _}: scope <> need_scopes(rest)
+    case x <> rest:
+      match x:
+        case Identity{_, name}: name <> identity_names(rest)
 
-def needs_met(ns: List<&2, Need>, +actual: List<&2, Permission>) -> Bool:
-  match ns:
+# Permission minimality: on every resource group, `person` has exactly what the agreement grants
+# there (nothing granted means no access at all).
+def access_minimal(groups: List<&2, String>, +a: Arc.Agreement, +person: String, +actual: List<&2, Permission>) -> Bool:
+  match groups:
     case []: True{}
-    case n <> rest:
-      match n:
-        case Need{scope, acts}: permissions_equal(scope, acts, actual) && needs_met(rest, actual)
-
-def pick_actions(hit: Bool, acts: List<&2, String>, rest: List<&2, String>) -> List<&2, String>:
-  match hit:
-    case True{}: acts
-    case False{}: rest
-
-def need_actions(+scope: String, ns: List<&2, Need>) -> List<&2, String>:
-  match ns:
-    case []: []
-    case n <> rest:
-      match n:
-        case Need{s, acts}: pick_actions(String.eq(scope, s), acts, need_actions(scope, rest))
-
-# One scope's effective permissions are exactly what the project declares it needs there.
-def scope_minimal(+scope: String, +ns: List<&2, Need>, +actual: List<&2, Permission>) -> Bool:
-  permissions_equal(scope, need_actions(scope, ns), actual)
+    case +g <> rest: permissions_equal(g, Arc.granted(a, person, g), actual) && access_minimal(rest, a, person, actual)

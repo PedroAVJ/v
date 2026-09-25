@@ -25,6 +25,17 @@ type Vendor is Data:
 type Org is Data:
   Org{name: String, vendor: Vendor, devices: List<&2, PhysicalDevice>}
 
+# The agreement between the organization and its people: who they are (identities in the org's
+# directory domain), what each is granted per scope (actions; none means no access), and budgets.
+# It describes the people who work on the system, not the system; the diagram may omit it.
+type Person is Data:
+  Person{key: String, identity: String}
+type Grant is Data:
+  Grant{person: String, scope: String, actions: List<&2, String>}
+type Budget is Data:
+  Budget{person: String, what: String, amount: Nat, unit: String}
+type Agreement is Data:
+  Agreement{domain: String, people: List<&2, Person>, grants: List<&2, Grant>, budgets: List<&2, Budget>}
 type Host is Data:
   Owned{device: String}
   Cloud{provider: String}
@@ -760,3 +771,61 @@ def d2(+s: System) -> String:
   "  plain: {style: {stroke: \"#8C8C8C\"; stroke-width: 2; font-color: \"#8C8C8C\"; font-size: 16}}\n" ++
   "}\n" ++
   node_boxes(nodes(s)) ++ container_boxes(containers(s)) ++ part_boxes(parts(s), s) ++ edges(links(s), s)
+
+# ---- the agreement: people, their identities and grants ----
+def ends_with_at(+identity: String, +domain: String) -> Bool:
+  String.ends_with(String.to_lower(identity), "@" ++ String.to_lower(domain))
+
+def people_in.go(xs: List<&2, Person>, +domain: String) -> Bool:
+  match xs:
+    case []:
+      True{}
+    case Person{_, identity} <> rest:
+      ends_with_at(identity, domain) && people_in.go(rest, domain)
+
+# Every person's identity is in the organization's directory domain.
+def people_in_domain(a: Agreement) -> Bool:
+  match a:
+    case Agreement{domain, people, _, _}:
+      people_in.go(people, domain)
+
+def is_identity(+id: String, xs: List<&2, Person>) -> Bool:
+  match xs:
+    case []:
+      False{}
+    case Person{_, identity} <> rest:
+      str_eq(String.to_lower(id), String.to_lower(identity)) || is_identity(id, rest)
+
+def identities_known.go(ids: List<&2, String>, +xs: List<&2, Person>) -> Bool:
+  match ids:
+    case []:
+      True{}
+    case id <> rest:
+      is_identity(id, xs) && identities_known.go(rest, xs)
+
+# Every identity actually in use (from a snapshot) is one of the agreement's people.
+def identities_known(ids: List<&2, String>, a: Agreement) -> Bool:
+  match a:
+    case Agreement{_, people, _, _}:
+      identities_known.go(ids, people)
+
+def pick_list(c: Bool, a: List<&2, String>, b: List<&2, String>) -> List<&2, String>:
+  match c:
+    case True{}:
+      a
+    case False{}:
+      b
+
+def granted.go(xs: List<&2, Grant>, +person: String, +scope: String) -> List<&2, String>:
+  match xs:
+    case []:
+      []
+    case Grant{p, sc, acts} <> rest:
+      pick_list(str_eq(person, p) && str_eq(scope, sc), acts, granted.go(rest, person, scope))
+
+# What `person` is granted on `scope`; [] when nothing is granted there.
+def granted(a: Agreement, +person: String, +scope: String) -> List<&2, String>:
+  match a:
+    case Agreement{_, _, grants, _}:
+      granted.go(grants, person, scope)
+
